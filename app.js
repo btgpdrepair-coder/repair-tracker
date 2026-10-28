@@ -374,6 +374,472 @@
   // ---------- เลือกหน้า ----------
 
   // เลือกหน้าจากสถานะผู้ใช้และพารามิเตอร์ ?page=
+  // ---------- แจ้งงาน 4 ขั้น (ใบงาน 06 · docs/design/UI.md หัวข้อ "แจ้งงาน") ----------
+
+  // ช่องของแต่ละขั้น ใช้เลือกข้อความผิดจาก Core.validateJob มาแสดงเฉพาะขั้นที่อยู่
+  var STEP_FIELDS = { 1: ['photos'], 2: ['asset', 'symptom'], 3: ['area', 'locationDetail'], 4: ['detail'] };
+  var MIC_HINT = 'กดไมค์บนแป้นพิมพ์เพื่อพูดแทนพิมพ์ได้';
+
+  // แบบร่างเก็บในเครื่อง (รวมรูป) ปิดแอปกลางคันแล้วเปิดใหม่ยังอยู่ · ที่เก็บเต็มหรือถูกปิดก็ใช้ต่อได้แค่ไม่มีแบบร่าง
+  function draftKey(me) { return 'btgpd-draft-' + me.userId; }
+  function loadDraft(me) {
+    try { return JSON.parse(localStorage.getItem(draftKey(me)) || 'null'); } catch (e) { return null; }
+  }
+  function saveDraft(me, draft) {
+    try { localStorage.setItem(draftKey(me), JSON.stringify(draft)); } catch (e) { /* ใช้ต่อได้โดยไม่มีแบบร่าง */ }
+  }
+  function clearDraft(me) {
+    try { localStorage.removeItem(draftKey(me)); } catch (e) { /* ไม่มีอะไรต้องทำ */ }
+  }
+
+  // รหัสแบบร่าง ส่งไปกับงาน กดส่งซ้ำตอนเน็ตหลุดแล้ว backend คืนงานเดิม ไม่เกิดงานซ้ำ
+  function newRequestId() {
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  // ย่อรูปในเครื่องก่อนส่ง ด้านยาวไม่เกิน Core.PHOTO_MAX_SIDE แล้วแปลงเป็น JPEG
+  function resizePhoto(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var scale = Math.min(1, Core.PHOTO_MAX_SIDE / Math.max(img.width, img.height));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', Core.PHOTO_QUALITY));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('อ่านรูปไม่ได้')); };
+      img.src = url;
+    });
+  }
+
+  function loading(subtitle) {
+    var main = screen(subtitle);
+    var card = el('section', 'card');
+    card.appendChild(el('p', 'muted', 'กำลังโหลด…'));
+    main.appendChild(card);
+  }
+
+  // กลุ่มช่องที่ไม่ใช่ช่องพิมพ์ช่องเดียว (รูป ปุ่มตัวเลือก) คืนกล่องสำหรับใส่ของข้างใน
+  function group(form, name, labelText) {
+    var box = el('div', 'field');
+    box.dataset.field = name;
+    box.appendChild(el('span', 'field-label', labelText));
+    var body = el('div', 'field-body');
+    box.appendChild(body);
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+    return body;
+  }
+
+  // ช่องพิมพ์ที่ผูกกับค่าในแบบร่าง พร้อมคำแนะนำไมค์ใต้ช่อง
+  function textField(form, me, draft, key, name, labelText, placeholder, onChange) {
+    var control = field(form, name, labelText, input('text', placeholder));
+    control.value = draft[key] || '';
+    control.addEventListener('input', function () {
+      draft[key] = control.value;
+      saveDraft(me, draft);
+      if (onChange) onChange();
+    });
+    control.parentNode.insertBefore(el('small', 'hint', MIC_HINT), control.nextSibling);
+    return control;
+  }
+
+  // รายการคำแนะนำใต้ช่องพิมพ์ กรองตามที่พิมพ์ (ไม่ใช้ datalist เพราะบนมือถือแสดงไม่เหมือนกัน)
+  function suggestions(control, items, onPick) {
+    var list = el('div', 'suggest');
+    control.parentNode.insertBefore(list, control.nextSibling);
+    function update() {
+      var typed = control.value.trim().toLowerCase();
+      list.innerHTML = '';
+      items
+        .filter(function (item) {
+          var text = item.text.toLowerCase();
+          return text !== typed && text.indexOf(typed) >= 0;
+        })
+        .slice(0, 5)
+        .forEach(function (item) {
+          var pick = el('button', 'suggest-item', item.text);
+          pick.type = 'button';
+          pick.addEventListener('click', function () {
+            control.value = item.text;
+            control.dispatchEvent(new Event('input'));
+          });
+          list.appendChild(pick);
+        });
+    }
+    control.addEventListener('input', update);
+    update();
+  }
+
+  // ปุ่มตัวเลือกแบบชิป ต่อท้ายด้วย "อื่น ๆ" (รหัส Core.OTHER)
+  function chips(body, items, selected, onPick) {
+    var row = el('div', 'chips');
+    items.concat([{ code: Core.OTHER, text: 'อื่น ๆ' }]).forEach(function (item) {
+      var chip = el('button', 'chip', item.text);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(item.code === selected));
+      chip.addEventListener('click', function () { onPick(item.code); });
+      row.appendChild(chip);
+    });
+    body.appendChild(row);
+  }
+
+  function showNewJob(me) {
+    loading('แจ้งงานใหม่');
+    api('reportOptions')
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        var draft = loadDraft(me);
+        if (!draft || !draft.clientRequestId) {
+          draft = {
+            clientRequestId: newRequestId(),
+            photos: [],
+            areaCode: res.data.lastAreaCode || '',
+            areaOther: res.data.lastAreaOther || '',
+          };
+        }
+        showReportStep(me, res.data, draft, draft.step || 1);
+      })
+      .catch(function () { showError('โหลดหน้าแจ้งงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  function showReportStep(me, options, draft, step) {
+    draft.step = step;
+    saveDraft(me, draft);
+    var main = screen('แจ้งงานใหม่');
+    var rerender = function () { showReportStep(me, options, draft, step); };
+
+    var progress = el('div', 'progress');
+    progress.appendChild(el('span', 'muted', 'ขั้น ' + step + ' จาก 4'));
+    var bar = el('div', 'progress-bar');
+    bar.appendChild(el('div', 'progress-fill')).style.width = (step * 25) + '%';
+    progress.appendChild(bar);
+    main.appendChild(progress);
+
+    var form = el('form', 'card');
+    form.noValidate = true;
+    var check = function () { return Core.validateJob(draft, options); };
+
+    if (step === 1) {
+      form.appendChild(el('h1', '', 'ถ่ายรูปอาการ'));
+      var body = group(form, 'photos', 'รูป 1–3 รูป *');
+      var thumbs = el('div', 'thumbs');
+      for (var i = 0; i < Core.PHOTO_MAX_COUNT; i++) thumbs.appendChild(photoCell(i));
+      body.appendChild(thumbs);
+      var camera = fileInput(false);
+      camera.setAttribute('capture', 'environment');
+      var album = fileInput(true);
+      var full = draft.photos.length >= Core.PHOTO_MAX_COUNT;
+      var cameraButton = el('button', 'primary', 'ถ่ายรูป');
+      cameraButton.type = 'button';
+      cameraButton.disabled = full;
+      cameraButton.addEventListener('click', function () { camera.click(); });
+      var albumButton = el('button', 'link', 'หรือเลือกจากอัลบั้ม');
+      albumButton.type = 'button';
+      albumButton.disabled = full;
+      albumButton.addEventListener('click', function () { album.click(); });
+      body.appendChild(cameraButton);
+      body.appendChild(albumButton);
+      body.appendChild(camera);
+      body.appendChild(album);
+      body.appendChild(el('p', 'notice', 'ถ้าทำได้ ถ่าย 1 รูปให้เห็นรอบ ๆ ด้วย ช่างจะหาเจอง่ายขึ้น'));
+    }
+
+    if (step === 2) {
+      form.appendChild(el('h1', '', 'อะไรเสีย เกิดอะไรขึ้น'));
+      var title = el('p', 'notice');
+      var showTitle = function () {
+        var value = check().value.title;
+        title.textContent = 'ชื่องาน: ' + (value || '-');
+      };
+      var asset = textField(form, me, draft, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
+      suggestions(asset, options.assetSuggestions || []);
+      var symptoms = group(form, 'symptom', 'เกิดอะไรขึ้น *');
+      chips(symptoms, options.symptoms.map(function (s) { return { code: s.code, text: s.label }; }), draft.symptomCode,
+        function (code) { draft.symptomCode = code; rerender(); });
+      if (draft.symptomCode === Core.OTHER) {
+        textField(form, me, draft, 'symptomOther', 'symptomOther', 'พิมพ์อาการ', 'เช่น มีกลิ่นไหม้', showTitle);
+      }
+      form.appendChild(title);
+      showTitle();
+    }
+
+    if (step === 3) {
+      form.appendChild(el('h1', '', 'อยู่ที่ไหน'));
+      var areas = group(form, 'area', 'พื้นที่ *');
+      chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), draft.areaCode,
+        function (code) { draft.areaCode = code; rerender(); });
+      if (draft.areaCode === Core.OTHER) {
+        textField(form, me, draft, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+      }
+      var spot = textField(form, me, draft, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
+      suggestions(spot, (options.locationSuggestions || {})[draft.areaCode] || []);
+    }
+
+    if (step === 4) {
+      form.appendChild(el('h1', '', 'ตรวจแล้วส่ง'));
+      var value = check().value;
+      var strip = el('div', 'thumbs small');
+      draft.photos.forEach(function (photo) {
+        var img = el('img');
+        img.src = photo;
+        img.alt = '';
+        strip.appendChild(img);
+      });
+      form.appendChild(summary('รูป', strip, 1));
+      form.appendChild(summary('ชื่องาน', el('span', '', value.title), 2));
+      form.appendChild(summary('พื้นที่', el('span', '', value.areaName), 3));
+      form.appendChild(summary('ตรงไหน', el('span', '', value.locationDetail), 3));
+      var detail = el('textarea');
+      detail.id = 'f-detail';
+      detail.rows = 3;
+      detail.placeholder = 'เช่น เริ่มรั่วตั้งแต่เช้า';
+      detail.value = draft.detail || '';
+      detail.addEventListener('input', function () { draft.detail = detail.value; saveDraft(me, draft); });
+      var detailBox = el('div', 'field');
+      detailBox.dataset.field = 'detail';
+      var detailLabel = el('label', '', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)');
+      detailLabel.htmlFor = detail.id;
+      detailBox.appendChild(detailLabel);
+      detailBox.appendChild(detail);
+      detailBox.appendChild(el('small', 'hint', MIC_HINT));
+      detailBox.appendChild(el('small', 'field-error'));
+      form.appendChild(detailBox);
+    }
+
+    var formError = el('p', 'error hidden');
+    form.appendChild(formError);
+    var nav = el('div', 'toolbar');
+    if (step > 1) {
+      var back = el('button', '', 'ย้อนกลับ');
+      back.type = 'button';
+      back.addEventListener('click', function () { showReportStep(me, options, draft, step - 1); });
+      nav.appendChild(back);
+    }
+    var next = el('button', 'primary', step < 4 ? 'ถัดไป' : 'ส่งงาน');
+    next.type = 'submit';
+    nav.appendChild(next);
+    form.appendChild(nav);
+
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var result = check();
+      if (step < 4) {
+        var fields = pickFields(result.fields, STEP_FIELDS[step]);
+        showFieldErrors(form, fields);
+        if (Object.keys(fields).length) return;
+        showReportStep(me, options, draft, step + 1);
+        return;
+      }
+      // ขั้นสุดท้ายตรวจทุกข้อ ถ้าขั้นก่อนหน้ายังขาด พากลับไปขั้นนั้น
+      if (!result.ok && goToFirstError(result.fields)) return;
+      sendJob(me, options, draft, next, formError);
+    });
+
+    main.appendChild(form);
+
+    // ช่องรูปย่อ 1 ช่อง มีรูปแล้วแสดงปุ่ม ✕ ลบ
+    function photoCell(index) {
+      var cell = el('div', 'thumb');
+      var photo = draft.photos[index];
+      if (!photo) return cell;
+      var img = el('img');
+      img.src = photo;
+      img.alt = 'รูปที่ ' + (index + 1);
+      var remove = el('button', 'thumb-remove', '✕');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', 'ลบรูปที่ ' + (index + 1));
+      remove.addEventListener('click', function () {
+        draft.photos.splice(index, 1);
+        rerender();
+      });
+      cell.appendChild(img);
+      cell.appendChild(remove);
+      return cell;
+    }
+
+    function fileInput(multiple) {
+      var node = document.createElement('input');
+      node.type = 'file';
+      node.accept = 'image/*';
+      node.multiple = multiple;
+      node.className = 'hidden';
+      node.addEventListener('change', function () { addPhotos(node.files); });
+      return node;
+    }
+
+    function addPhotos(files) {
+      var room = Core.PHOTO_MAX_COUNT - draft.photos.length;
+      var picked = Array.prototype.slice.call(files || [], 0, room);
+      if (!picked.length) return;
+      var dropped = files.length > picked.length;
+      cameraButton.disabled = true;
+      cameraButton.textContent = 'กำลังย่อรูป…';
+      Promise.all(picked.map(resizePhoto))
+        .then(function (photos) {
+          draft.photos = draft.photos.concat(photos);
+          rerender();
+          if (dropped) {
+            showFieldErrors(document.querySelector('form'),
+              { photos: 'แนบได้ไม่เกิน ' + Core.PHOTO_MAX_COUNT + ' รูป ใช้เฉพาะรูปแรก ๆ ที่เลือก' });
+          }
+        })
+        .catch(function () {
+          rerender();
+          showFieldErrors(document.querySelector('form'), { photos: 'อ่านรูปไม่ได้ ลองถ่ายใหม่อีกครั้ง' });
+        });
+    }
+
+    // แถวสรุป 1 แถวในขั้น 4 พร้อมปุ่ม "แก้" กลับไปขั้นนั้น
+    function summary(name, valueNode, backTo) {
+      var line = el('div', 'summary');
+      var info = el('div', 'summary-info');
+      info.appendChild(el('small', 'muted', name));
+      info.appendChild(valueNode);
+      line.appendChild(info);
+      var edit = el('button', 'small', 'แก้');
+      edit.type = 'button';
+      edit.addEventListener('click', function () { showReportStep(me, options, draft, backTo); });
+      line.appendChild(edit);
+      return line;
+    }
+
+    function goToFirstError(fields) {
+      for (var s = 1; s <= 4; s++) {
+        var found = pickFields(fields, STEP_FIELDS[s]);
+        if (Object.keys(found).length) {
+          showReportStep(me, options, draft, s);
+          showFieldErrors(document.querySelector('form'), found);
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+
+  // เลือกเฉพาะข้อความผิดของช่องที่ระบุ (ข้อผิดของช่อง "อื่น ๆ" แสดงใต้กลุ่มปุ่มที่อยู่ติดกัน)
+  function pickFields(fields, names) {
+    var out = {};
+    names.forEach(function (name) {
+      if (fields[name]) out[name] = fields[name];
+    });
+    return out;
+  }
+
+  function sendJob(me, options, draft, button, formError) {
+    button.disabled = true;
+    button.textContent = 'กำลังส่ง…';
+    formError.classList.add('hidden');
+    api('createJob', {
+      photos: draft.photos,
+      asset: draft.asset,
+      symptomCode: draft.symptomCode,
+      symptomOther: draft.symptomOther,
+      areaCode: draft.areaCode,
+      areaOther: draft.areaOther,
+      locationDetail: draft.locationDetail,
+      detail: draft.detail,
+      clientRequestId: draft.clientRequestId,
+    })
+      .then(function (res) {
+        if (res.ok) {
+          clearDraft(me);
+          showJobSent(me, res.data);
+          return;
+        }
+        formError.textContent = res.error.message;
+        formError.classList.remove('hidden');
+      })
+      .catch(function () {
+        formError.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกด "ส่งงาน" อีกครั้ง ข้อมูลที่กรอกไว้ยังอยู่ครบ';
+        formError.classList.remove('hidden');
+      })
+      .then(function () {
+        button.disabled = false;
+        button.textContent = 'ส่งงาน';
+      });
+  }
+
+  // หน้าส่งงานสำเร็จ
+  function showJobSent(me, job) {
+    var main = screen('ส่งงานแล้ว');
+    var card = el('section', 'card done');
+    card.appendChild(el('div', 'done-mark', '✓'));
+    card.appendChild(el('p', 'muted', 'เลขงาน'));
+    card.appendChild(el('p', 'job-id', job.jobId));
+    card.appendChild(el('p', '', job.title));
+    card.appendChild(el('p', 'notice', 'หัวหน้ากะแผนก' + job.department + ' จะเปิด Noti ใน SAP ให้'));
+    var close = el('button', 'primary', 'กลับไปที่แชท');
+    close.addEventListener('click', function () { liff.closeWindow(); });
+    var again = el('button', '', 'แจ้งงานอีกงาน');
+    again.addEventListener('click', function () { showNewJob(me); });
+    card.appendChild(close);
+    card.appendChild(again);
+    main.appendChild(card);
+  }
+
+  // ---------- งานของฉัน ----------
+
+  var MY_FILTERS = [
+    ['ทั้งหมด', null],
+    ['รอเปิด Noti', ['PENDING_NOTI']],
+    ['กำลังซ่อม', ['IN_REPAIR']],
+    ['เสร็จแล้ว', ['REPAIRED', 'CLOSED']],
+  ];
+
+  function showMyJobs(me) {
+    loading('งานของฉัน');
+    api('listMyJobs')
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        renderMyJobs(res.data.jobs, 0);
+      })
+      .catch(function () { showError('โหลดงานของฉันไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  function renderMyJobs(jobs, filterIndex) {
+    var main = screen('งานของฉัน');
+    var bar = el('div', 'chips filters');
+    MY_FILTERS.forEach(function (filter, index) {
+      var count = jobs.filter(function (j) { return !filter[1] || filter[1].indexOf(j.status) >= 0; }).length;
+      var chip = el('button', 'chip', filter[0] + ' ' + count);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(index === filterIndex));
+      chip.addEventListener('click', function () { renderMyJobs(jobs, index); });
+      bar.appendChild(chip);
+    });
+    main.appendChild(bar);
+
+    var statuses = MY_FILTERS[filterIndex][1];
+    var shown = jobs.filter(function (j) { return !statuses || statuses.indexOf(j.status) >= 0; });
+    var card = el('section', 'card');
+    if (!jobs.length) card.appendChild(el('p', 'muted', 'ยังไม่เคยแจ้งงาน กด "แจ้งงานใหม่" ที่เมนูในแชทเพื่อเริ่ม'));
+    else if (!shown.length) card.appendChild(el('p', 'muted', 'ไม่มีงานในกลุ่มนี้'));
+    shown.forEach(function (job) {
+      var item = el('div', 'job');
+      var label = Core.JOB_STATUS_LABEL[job.status] || [job.status, 'off'];
+      var head = el('div', 'job-head');
+      head.appendChild(badge(label[0], label[1]));
+      head.appendChild(el('small', 'muted', job.jobId));
+      item.appendChild(head);
+      item.appendChild(el('strong', '', job.title));
+      item.appendChild(el('small', 'muted', [job.areaName, job.locationDetail].filter(Boolean).join(' · ')));
+      item.appendChild(el('small', 'muted', 'แจ้งเมื่อ ' + shortTime(job.createdAt)));
+      card.appendChild(item);
+    });
+    main.appendChild(card);
+  }
+
+  // "2026-10-28 08:05:00" → "28/10 08:05"
+  function shortTime(value) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(value || ''));
+    return m ? m[3] + '/' + m[2] + ' ' + m[4] + ':' + m[5] : String(value || '');
+  }
+
   function route(me) {
     var page = new URLSearchParams(window.location.search).get('page') || '';
     if (me.status === 'NOT_REGISTERED' || me.status === 'REJECTED') {
@@ -391,7 +857,12 @@
       if (me.role === 'ADMIN') return showUsers(me);
       return showError('หน้านี้สำหรับแอดมินเท่านั้น');
     }
-    // หน้าที่ปุ่มเมนูเปิดได้แล้วแต่ยังไม่ได้สร้าง (ทำในใบงาน 06 เป็นต้นไป)
+    if (page === 'new') {
+      if (Core.REPORTER_ROLES.indexOf(me.role) >= 0) return showNewJob(me);
+      return showError('โรลของคุณแจ้งงานไม่ได้ ติดต่อแอดมินถ้าต้องการแจ้งงาน');
+    }
+    if (page === 'my') return showMyJobs(me);
+    // หน้าที่ปุ่มเมนูเปิดได้แล้วแต่ยังไม่ได้สร้าง (ทำในใบงาน 07 เป็นต้นไป)
     if (page) return showStatus(me, 'หน้านี้กำลังสร้าง จะเปิดใช้เร็ว ๆ นี้');
     return showStatus(me);
   }

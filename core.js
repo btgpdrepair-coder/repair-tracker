@@ -179,6 +179,14 @@ var Core = (function () {
     return jobId + '_' + kind + (round > 1 ? round : '') + '_' + index + '.jpg';
   }
 
+  // ชื่อพื้นที่ของงาน: "อื่น ๆ" ใช้ชื่อที่พิมพ์ ที่เหลือแปลงรหัสเป็นชื่อ (รวมพื้นที่ที่ปิดใช้แล้ว)
+  // areas คือรายการ { code, name } จากชีต Areas
+  function jobAreaName(job, areas) {
+    if (job.AreaCode === OTHER) return job.AreaOther || '';
+    var area = (areas || []).filter(function (a) { return a.code === job.AreaCode; })[0];
+    return area ? area.name : job.AreaCode;
+  }
+
   // ชื่องาน "อะไรเสีย อาการ" เช่น "ปั๊มน้ำ รั่ว" ไม่เกิน 60 ตัวอักษร
   function jobTitle(asset, symptomLabel) {
     return (asset + ' ' + symptomLabel).trim().slice(0, TITLE_MAX);
@@ -298,6 +306,7 @@ var Core = (function () {
     nextJobId: nextJobId,
     photoFileName: photoFileName,
     jobTitle: jobTitle,
+    jobAreaName: jobAreaName,
     validateJob: validateJob,
   };
 })();

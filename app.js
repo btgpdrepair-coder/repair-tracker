@@ -748,6 +748,7 @@
       .then(function (res) {
         if (res.ok) {
           clearDraft(me);
+          sendConfirmMessage(res.data.jobId);
           showJobSent(me, res.data);
           return;
         }
@@ -762,6 +763,16 @@
         button.disabled = false;
         button.textContent = 'ส่งงาน';
       });
+  }
+
+  // ส่งข้อความ "แจ้งงาน R-xxxx-xxx" เข้าแชทในนามผู้ใช้ แล้ว webhook ตอบกลับเป็นการ์ดยืนยัน (ใบงาน 07)
+  // ต้องเป็นข้อความตัวอักษร เพราะ Flex ที่ส่งจาก LIFF ไม่ทำให้เกิด webhook
+  // ใช้ได้เฉพาะตอนเปิดแอปจากห้องแชท ส่งไม่ได้ก็ข้ามไปเงียบ ๆ หน้าสำเร็จแสดงเลขงานอยู่แล้ว
+  function sendConfirmMessage(jobId) {
+    try {
+      if (!liff.isInClient()) return;
+      liff.sendMessages([{ type: 'text', text: 'แจ้งงาน ' + jobId }]).catch(function () { /* ข้ามไปเงียบ ๆ */ });
+    } catch (e) { /* ข้ามไปเงียบ ๆ */ }
   }
 
   // หน้าส่งงานสำเร็จ

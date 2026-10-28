@@ -249,3 +249,17 @@ button.link { min-height: 44px; border: 0; background: none; color: var(--primar
 
 /* ลายเซ็นล่างสุดของหน้า ตัวเล็กสีจาง */
 .signature { margin: auto 0 0; padding-top: 32px; text-align: center; font-size: 12px; color: var(--faint); }
+
+/* กล้องในหน้าแอป (ขั้นถ่ายรูป) เต็มจอพื้นดำ */
+.cam { position: fixed; inset: 0; z-index: 20; background: #000000; display: flex; flex-direction: column; color: #FFFFFF; }
+.cam video { flex: 1; min-height: 0; width: 100%; object-fit: cover; }
+.cam.cam-flash video { opacity: 0.3; }
+.cam-message { margin: auto 16px; text-align: center; }
+.cam-strip { display: flex; gap: 8px; padding: 8px 16px 0; min-height: 0; }
+.cam-strip img { width: 56px; height: 56px; object-fit: cover; border-radius: 10px; border: 2px solid #FFFFFF; }
+.cam-bar { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
+.cam-count { min-width: 64px; font-size: 15px; }
+.cam-shutter { width: 76px; height: 76px; min-height: 76px; padding: 0; border-radius: 50%; border: 6px solid rgba(255, 255, 255, 0.5); background: #FFFFFF; }
+.cam-bar button.small { min-width: 64px; }
+.cam-fallback { margin: 0 16px calc(16px + env(safe-area-inset-bottom)); }
+.cam-bar { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }

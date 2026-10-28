@@ -537,7 +537,7 @@
       var cameraButton = el('button', 'primary', 'ถ่ายรูป');
       cameraButton.type = 'button';
       cameraButton.disabled = full;
-      cameraButton.addEventListener('click', function () { camera.click(); });
+      cameraButton.addEventListener('click', function () { openCamera(); });
       var albumButton = el('button', 'link', 'หรือเลือกจากอัลบั้ม');
       albumButton.type = 'button';
       albumButton.disabled = full;
@@ -691,6 +691,95 @@
         .catch(function () {
           rerender();
           showFieldErrors(document.querySelector('form'), { photos: 'อ่านรูปไม่ได้ ลองถ่ายใหม่อีกครั้ง' });
+        });
+    }
+
+    // กล้องในหน้าแอป: กดถ่ายรูปแล้วเห็นภาพกล้องหลังทันที ไม่ต้องผ่านหน้าเลือก "กล้อง / ไฟล์" ของ LINE บน Android
+    // เปิดกล้องในแอปไม่ได้ ใช้แบบเดิมแทน (ช่องไฟล์แบบ capture ซึ่งบน Android จะมีหน้าเลือก "กล้อง / ไฟล์")
+    function openCamera() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        camera.click();
+        return;
+      }
+      var overlay = el('div', 'cam');
+      var video = el('video');
+      video.setAttribute('playsinline', '');
+      video.muted = true;
+      video.autoplay = true;
+      var message = el('p', 'cam-message hidden');
+      var strip = el('div', 'cam-strip');
+      var count = el('span', 'cam-count');
+      var shutter = el('button', 'cam-shutter');
+      shutter.type = 'button';
+      shutter.setAttribute('aria-label', 'ถ่าย');
+      shutter.disabled = true;
+      var done = el('button', 'small', 'เสร็จ');
+      done.type = 'button';
+      // ปุ่มนี้โผล่เฉพาะตอนเปิดกล้องในแอปไม่ได้ (เช่น ไม่ได้อนุญาตกล้อง) ต้องให้ผู้ใช้แตะเอง เพราะเบราว์เซอร์ไม่ยอมเปิดช่องไฟล์ให้โดยไม่มีการแตะ
+      var phoneCamera = el('button', 'primary cam-fallback hidden', 'ใช้กล้องแบบเดิม');
+      phoneCamera.type = 'button';
+      var bar = el('div', 'cam-bar');
+      bar.appendChild(count);
+      bar.appendChild(shutter);
+      bar.appendChild(done);
+      overlay.appendChild(video);
+      overlay.appendChild(message);
+      overlay.appendChild(strip);
+      overlay.appendChild(bar);
+      overlay.appendChild(phoneCamera);
+      document.body.appendChild(overlay);
+
+      var stream = null;
+      function close() {
+        if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+        overlay.remove();
+        rerender();
+      }
+      function update() {
+        count.textContent = 'รูป ' + draft.photos.length + '/' + Core.PHOTO_MAX_COUNT;
+        strip.innerHTML = '';
+        draft.photos.forEach(function (photo) {
+          var img = el('img');
+          img.src = photo;
+          img.alt = '';
+          strip.appendChild(img);
+        });
+      }
+      function fail(text) {
+        message.textContent = text;
+        message.classList.remove('hidden');
+        shutter.classList.add('hidden');
+        phoneCamera.classList.remove('hidden');
+      }
+      update();
+      done.addEventListener('click', close);
+      phoneCamera.addEventListener('click', function () { close(); camera.click(); });
+      shutter.addEventListener('click', function () {
+        var scale = Math.min(1, Core.PHOTO_MAX_SIDE / Math.max(video.videoWidth, video.videoHeight));
+        var canvas = document.createElement('canvas');
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        draft.photos.push(canvas.toDataURL('image/jpeg', Core.PHOTO_QUALITY));
+        saveDraft(me, draft);
+        overlay.classList.add('cam-flash');
+        setTimeout(function () { overlay.classList.remove('cam-flash'); }, 150);
+        update();
+        if (draft.photos.length >= Core.PHOTO_MAX_COUNT) close();
+      });
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      })
+        .then(function (s) {
+          stream = s;
+          if (!overlay.isConnected) { close(); return; }
+          video.srcObject = s;
+          return video.play().then(function () { shutter.disabled = false; });
+        })
+        .catch(function () {
+          fail('เปิดกล้องในแอปไม่ได้ (อาจยังไม่ได้อนุญาตให้ใช้กล้อง)');
         });
     }
 

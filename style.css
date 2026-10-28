@@ -21,6 +21,8 @@
   --info-text: #1D4F8A;
   --off-bg: #ECEEEE;
   --off-text: #5A6461;
+  --back-bg: #FCE3D3;
+  --back-text: #8A3B12;
 }
 
 * { box-sizing: border-box; }
@@ -291,4 +293,31 @@ button.thumb { padding: 0; min-height: 0; border-radius: 14px; font-size: 13px; 
 a.button-link {
   display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: 26px;
   border: 1px solid var(--line); background: var(--surface); color: var(--text); font-weight: 700; text-decoration: none;
+}
+
+/* ใบงาน 09–15: ปุ่มตามสถานะ คิวงาน เปิด Noti และงานทั้งหมด */
+.badge.back { background: var(--back-bg); color: var(--back-text); }
+.badge { white-space: nowrap; flex-shrink: 0; }
+.badges { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.success { background: var(--ok-bg); color: var(--ok-text); border-radius: 14px; padding: 12px 14px; margin: 0; font-size: 15px; }
+.sent-back { background: var(--back-bg); color: var(--back-text); border-radius: 14px; padding: 12px 14px; margin: 0; font-size: 15px; }
+.actions { display: flex; flex-direction: column; gap: 10px; }
+.actions .choice { background: var(--surface); }
+a.button-link.small { min-height: 44px; font-size: 15px; flex: 1; }
+.qcard {
+  width: 100%; min-height: 0; display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: start; text-align: left;
+  border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; font-weight: 400; padding: 12px 0 0;
+}
+.card-head + .qcard, .qcard.static { border-top: 0; padding-top: 0; }
+.qcard .thumb { width: 64px; height: 64px; border-radius: 12px; border-style: solid; }
+.qinfo { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.qinfo .job-head { align-items: flex-start; }
+.qinfo strong { font-size: 16px; }
+.qinfo small { font-size: 14px; }
+.noti-big { font-size: 40px; font-weight: 700; letter-spacing: 2px; font-variant-numeric: tabular-nums; margin: 8px 0 !important; }
+.field input.big-input { font-size: 24px; letter-spacing: 2px; font-weight: 700; }
+.filter-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.filter-row select {
+  min-height: 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--text); font: inherit; font-size: 15px; padding: 0 10px; min-width: 0;
 }

@@ -179,6 +179,20 @@ var Core = (function () {
     return jobId + '_' + kind + (round > 1 ? round : '') + '_' + index + '.jpg';
   }
 
+  // ผู้แจ้งแก้งานได้ภายใน 24 ชม. นับจากแจ้ง และเฉพาะตอนรอเปิด Noti · แอดมินแก้ได้ทุกงานทุกเวลา
+  // คืน { allowed, hoursLeft } โดย hoursLeft มีเฉพาะผู้แจ้ง (ปัดขึ้นเป็นชั่วโมง) ใช้แสดงบนปุ่ม "แก้ไข (เหลือ X ชม.)"
+  var EDIT_WINDOW_HOURS = 24;
+  function canEditJob(job, user, now) {
+    if (user.Role === 'ADMIN') return { allowed: true, hoursLeft: null };
+    if (job.ReporterID !== user.UserID || job.Status !== JOB_STATUS.PENDING_NOTI) return { allowed: false, hoursLeft: null };
+    var start = parseTime(job.CreatedAt);
+    var end = parseTime(now);
+    if (start === null || end === null) return { allowed: false, hoursLeft: null };
+    var left = EDIT_WINDOW_HOURS * 3600000 - (end - start);
+    if (left <= 0) return { allowed: false, hoursLeft: null };
+    return { allowed: true, hoursLeft: Math.ceil(left / 3600000) };
+  }
+
   // อายุงานแบบสั้น เช่น "15 นาที" "3 ชม." "2 วัน" จากเวลาข้อความ YYYY-MM-DD HH:mm:ss สองค่า (เวลาไทยทั้งคู่)
   function ageText(from, now) {
     var a = parseTime(from);
@@ -294,6 +308,199 @@ var Core = (function () {
       /^[A-Za-z0-9+/]+=*$/.test(value.slice(PHOTO_PREFIX.length));
   }
 
+  // ---------- Config ----------
+
+  // ค่าตัวเลขในชีต Config (เก็บเป็นข้อความ) ว่างหรือไม่ใช่ตัวเลขบวกใช้ค่าเริ่มต้น
+  function configNumber(config, key, fallback) {
+    var raw = String((config || {})[key] == null ? '' : config[key]).trim();
+    var n = Number(raw);
+    return raw !== '' && isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  // สวิตช์ TRUE/FALSE ในชีต Config ว่างหรือพิมพ์ผิดใช้ค่าเริ่มต้น
+  function configFlag(config, key, fallback) {
+    var raw = String((config || {})[key] == null ? '' : config[key]).trim().toUpperCase();
+    if (raw === 'TRUE') return true;
+    if (raw === 'FALSE') return false;
+    return fallback;
+  }
+
+  // ---------- งานค้าง (ใบงาน 15) ----------
+
+  // สถานะที่ยังไม่จบ (นับค้างได้)
+  var OPEN_STATUSES = [JOB_STATUS.PENDING_NOTI, JOB_STATUS.IN_REPAIR, JOB_STATUS.REPAIRED];
+
+  // เกณฑ์งานค้างของสถานะ { hours, label } เช่น { 168, '7 วัน' } สถานะที่จบแล้วคืน null
+  function slaLimit(status, config) {
+    if (status === JOB_STATUS.PENDING_NOTI) {
+      var h = configNumber(config, 'SLA_NOTI_HOURS', 24);
+      return { hours: h, label: h + ' ชม.' };
+    }
+    var days = status === JOB_STATUS.IN_REPAIR ? configNumber(config, 'SLA_REPAIR_DAYS', 7)
+      : status === JOB_STATUS.REPAIRED ? configNumber(config, 'SLA_CLOSE_DAYS', 3) : null;
+    return days === null ? null : { hours: days * 24, label: days + ' วัน' };
+  }
+
+  // เวลาที่งานเข้าสถานะปัจจุบันครั้งล่าสุด: แถว StatusLog ล่าสุดที่ ToStatus เป็นสถานะปัจจุบัน และสถานะเปลี่ยนจริง (หรือเป็น CREATE)
+  // แถว EDIT (สถานะเดิม = ใหม่) จึงไม่ทำให้เริ่มนับใหม่ · ส่งกลับให้ช่างเริ่มนับใหม่ · ไม่มีประวัติใช้เวลาแจ้ง
+  function statusSince(job, logs) {
+    var since = '';
+    (logs || []).forEach(function (l) {
+      if (l.JobID && l.JobID !== job.JobID) return;
+      if (l.ToStatus !== job.Status) return;
+      if (l.Action !== 'CREATE' && l.FromStatus === l.ToStatus) return;
+      if (String(l.At) >= since) since = String(l.At);
+    });
+    return since || job.CreatedAt;
+  }
+
+  // งานค้างไหม: { overdue, since, limit } limit คือข้อความเกณฑ์ เช่น "24 ชม." ใช้บนป้าย "ค้างเกิน 24 ชม."
+  function overdueInfo(job, logs, now, config) {
+    var since = statusSince(job, logs);
+    var limit = slaLimit(job.Status, config);
+    if (!limit) return { overdue: false, since: since, limit: '' };
+    var a = parseTime(since);
+    var b = parseTime(now);
+    return { overdue: a !== null && b !== null && b - a > limit.hours * 3600000, since: since, limit: limit.label };
+  }
+
+  // ---------- เลข Noti (ใบงาน 10) ----------
+
+  // ตรวจเลข Noti และชื่องาน SAP ตามจำนวนหลักและความยาวใน Config คืน { ok, fields, value }
+  // เลข Noti เก็บเป็นข้อความ เลข 0 ข้างหน้าไม่หาย · เว้นวรรคที่พิมพ์มา (เช่น "1004 5678") ตัดออก
+  function validateNoti(input, config) {
+    input = input || {};
+    var digits = configNumber(config, 'NOTI_DIGITS', 8);
+    var max = configNumber(config, 'SAP_SHORTTEXT_MAX', 40);
+    var notiNo = text(input.notiNo).replace(/\s+/g, '');
+    var sap = text(input.sapShortText);
+    var fields = {};
+    if (!notiNo) fields.notiNo = 'กรุณากรอกเลข Noti';
+    else if (!new RegExp('^\\d{' + digits + '}$').test(notiNo)) fields.notiNo = 'เลข Noti ต้องเป็นตัวเลข ' + digits + ' หลัก';
+    if (!sap) fields.sapShortText = 'กรุณากรอกชื่องาน SAP';
+    else if (sap.length > max) fields.sapShortText = 'ชื่องาน SAP ยาวเกิน ' + max + ' ตัวอักษร';
+    return { ok: Object.keys(fields).length === 0, fields: fields, value: { notiNo: notiNo, sapShortText: sap } };
+  }
+
+  // งานอื่นที่ยังไม่ยกเลิกซึ่งใช้เลข Noti นี้แล้ว ไม่มีคืน null (เลขของงานที่ยกเลิกแล้วนำมาใช้ใหม่ได้)
+  function duplicateNoti(jobs, notiNo, exceptJobId) {
+    return (jobs || []).filter(function (j) {
+      return j.JobID !== exceptJobId && j.Status !== JOB_STATUS.CANCELLED && text(j.NotiNo) === notiNo;
+    })[0] || null;
+  }
+
+  // ชื่องาน SAP เริ่มต้น "อะไรเสีย อาการ พื้นที่ ตรงไหน" ไม่เกินความยาวใน Config (ผู้ใช้แก้ได้)
+  // ตัดทีละคำ ไม่ตัดกลางคำ (สระและวรรณยุกต์ไทยไม่ขาด) ถ้าคำแรกยาวเกินเองค่อยตัดตามจำนวนตัวอักษร
+  function sapShortText(title, areaName, locationDetail, config) {
+    var max = configNumber(config, 'SAP_SHORTTEXT_MAX', 40);
+    var words = [title, areaName, locationDetail].map(text).join(' ').split(/\s+/).filter(Boolean);
+    var out = '';
+    for (var i = 0; i < words.length; i++) {
+      var next = out ? out + ' ' + words[i] : words[i];
+      if (next.length > max) break;
+      out = next;
+    }
+    return out || (words[0] || '').slice(0, max);
+  }
+
+  // แสดงเลข Noti ทีละ 4 หลัก เช่น 10045678 → "1004 5678"
+  function formatNoti(notiNo) {
+    return String(notiNo || '').replace(/(\d{4})(?=\d)/g, '$1 ');
+  }
+
+  // ---------- รูปหลังซ่อม ยกเลิก และสิทธิ์ตามสถานะ (ใบงาน 11, 13, 14) ----------
+
+  var NOTE_MAX = 300;
+
+  // ตรวจรูปหลังซ่อม/หลังแก้ 1–3 รูป และบันทึก (บังคับ) คืน { ok, fields: { photos, note }, value }
+  function validateAfterRepair(input, noteMessage) {
+    input = input || {};
+    var photos = Array.isArray(input.photos) ? input.photos : [];
+    var note = text(input.note);
+    var fields = {};
+    if (!photos.length) fields.photos = 'กรุณาถ่ายรูปอย่างน้อย 1 รูป';
+    else if (photos.length > PHOTO_MAX_COUNT) fields.photos = 'แนบรูปได้ไม่เกิน ' + PHOTO_MAX_COUNT + ' รูป';
+    else if (!photos.every(isPhoto)) fields.photos = 'รูปไม่ถูกต้อง ลองถ่ายใหม่อีกครั้ง';
+    if (!note) fields.note = noteMessage || 'กรุณาบอกว่าซ่อมอะไรไป';
+    else if (note.length > NOTE_MAX) fields.note = 'ยาวเกิน ' + NOTE_MAX + ' ตัวอักษร';
+    return { ok: Object.keys(fields).length === 0, fields: fields, value: { photos: photos, note: note } };
+  }
+
+  // รูปหลังซ่อมเก็บทุกรอบในคอลัมน์ PhotoAfter: รอบคั่นด้วย ; รูปในรอบคั่นด้วย , → [[id, ...], ...]
+  function photoRounds(value) {
+    return String(value || '').split(';').map(function (round) {
+      return round.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    }).filter(function (round) { return round.length; });
+  }
+
+  // เหตุผลยกเลิกงาน (SPEC คอลัมน์ CancelReason)
+  var CANCEL_REASON = {
+    DUPLICATE: 'ซ้ำกับงานอื่น',
+    INVALID: 'แจ้งผิด',
+    FIXED_NO_NOTI: 'แก้เสร็จหน้างานแล้ว ไม่ต้องเปิด Noti',
+    OTHER: 'อื่น ๆ',
+  };
+
+  // ผู้ใช้คนนี้ทำอะไรกับงานนี้ได้บ้าง ใช้ทั้งตอนแสดงปุ่มและตอน backend ตรวจสิทธิ์
+  // หัวหน้ากะทำได้เฉพาะงานแผนกตัวเอง (ADR 0003) · แอดมินทำได้ทุกงาน
+  function jobPermissions(job, user, config) {
+    var s = job.Status;
+    var admin = user.Role === 'ADMIN';
+    var manager = admin || (user.Role === 'LEAD' && job.Department === user.Department);
+    var noNoti = configFlag(config, 'ALLOW_CLOSE_WITHOUT_NOTI', true);
+    var reasons = [];
+    if (manager) {
+      reasons = ['DUPLICATE', 'INVALID'];
+      if (!noNoti) reasons.push('FIXED_NO_NOTI');
+      if (admin) reasons.push('OTHER');
+    }
+    return {
+      addNoti: manager && s === JOB_STATUS.PENDING_NOTI,
+      fixOnSite: manager && noNoti && s === JOB_STATUS.PENDING_NOTI,
+      cancel: (manager && s === JOB_STATUS.PENDING_NOTI) || (admin && (s === JOB_STATUS.IN_REPAIR || s === JOB_STATUS.REPAIRED)),
+      repair: (user.Role === 'TECH' || admin) && s === JOB_STATUS.IN_REPAIR,
+      close: manager && s === JOB_STATUS.REPAIRED,
+      cancelReasons: reasons,
+    };
+  }
+
+  // ---------- สรุปงานค้าง (ใบงาน 16, 17) ----------
+
+  // นับงานค้างจากงานชุดหนึ่ง (กรองแผนกมาก่อนถ้าต้องการ) logs คือ StatusLog ทั้งหมด
+  // คืน { open, overdue, byStatus: { สถานะ: { count, overdue } }, byDepartment: { แผนก: จำนวน },
+  //       oldest: [งานที่แจ้งมานานสุด 3 งาน], noNotiThisMonth: { แผนก: จำนวน } }
+  function summarize(jobs, logs, now, config) {
+    var byJob = {};
+    (logs || []).forEach(function (l) { (byJob[l.JobID] = byJob[l.JobID] || []).push(l); });
+    var month = String(now).slice(0, 7);
+    var result = { open: 0, overdue: 0, byStatus: {}, byDepartment: {}, oldest: [], noNotiThisMonth: {} };
+    OPEN_STATUSES.forEach(function (s) { result.byStatus[s] = { count: 0, overdue: 0 }; });
+    var open = [];
+    (jobs || []).forEach(function (j) {
+      var dept = j.Department || '-';
+      if (j.Status === JOB_STATUS.CLOSED && configFlagValue(j.ClosedWithoutNoti) && String(j.ClosedAt || '').slice(0, 7) === month) {
+        result.noNotiThisMonth[dept] = (result.noNotiThisMonth[dept] || 0) + 1;
+      }
+      if (OPEN_STATUSES.indexOf(j.Status) < 0) return;
+      var late = overdueInfo(j, byJob[j.JobID], now, config).overdue;
+      result.open++;
+      result.byStatus[j.Status].count++;
+      if (late) { result.overdue++; result.byStatus[j.Status].overdue++; }
+      result.byDepartment[dept] = (result.byDepartment[dept] || 0) + 1;
+      open.push(j);
+    });
+    open.sort(function (a, b) { return String(a.CreatedAt).localeCompare(String(b.CreatedAt)); });
+    result.oldest = open.slice(0, 3).map(function (j) {
+      return { jobId: j.JobID, title: j.Title, status: j.Status, age: ageText(j.CreatedAt, now) };
+    });
+    return result;
+  }
+
+  // ช่อง TRUE/FALSE ในชีต (ช่องติ๊กอ่านออกมาเป็นข้อความ) หรือค่า true
+  function configFlagValue(value) {
+    return value === true || String(value).toUpperCase() === 'TRUE';
+  }
+
   return {
     ROLES: ROLES,
     REQUESTABLE_ROLES: REQUESTABLE_ROLES,
@@ -325,7 +532,26 @@ var Core = (function () {
     jobTitle: jobTitle,
     jobAreaName: jobAreaName,
     ageText: ageText,
+    canEditJob: canEditJob,
     validateJob: validateJob,
+    parseTime: parseTime,
+    configNumber: configNumber,
+    configFlag: configFlag,
+    isTrue: configFlagValue,
+    OPEN_STATUSES: OPEN_STATUSES,
+    slaLimit: slaLimit,
+    statusSince: statusSince,
+    overdueInfo: overdueInfo,
+    validateNoti: validateNoti,
+    duplicateNoti: duplicateNoti,
+    sapShortText: sapShortText,
+    formatNoti: formatNoti,
+    NOTE_MAX: NOTE_MAX,
+    validateAfterRepair: validateAfterRepair,
+    photoRounds: photoRounds,
+    CANCEL_REASON: CANCEL_REASON,
+    jobPermissions: jobPermissions,
+    summarize: summarize,
   };
 })();
 

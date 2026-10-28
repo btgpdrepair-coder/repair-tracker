@@ -201,10 +201,10 @@
   }
 
   // สร้างช่องกรอก 1 ช่อง พร้อมป้ายชื่อและที่แสดงข้อความผิด คืน element ของช่องกรอก
-  function field(form, name, labelText, control) {
+  function field(form, name, labelText, control, optional) {
     var box = el('div', 'field');
     box.dataset.field = name;
-    var label = el('label', '', labelText + ' *');
+    var label = el('label', '', labelText + (optional ? '' : ' *'));
     control.id = 'f-' + name;
     label.htmlFor = control.id;
     box.appendChild(label);
@@ -377,7 +377,7 @@
   // ---------- แจ้งงาน 4 ขั้น (ใบงาน 06 · docs/design/UI.md หัวข้อ "แจ้งงาน") ----------
 
   // ช่องของแต่ละขั้น ใช้เลือกข้อความผิดจาก Core.validateJob มาแสดงเฉพาะขั้นที่อยู่
-  var STEP_FIELDS = { 1: ['photos'], 2: ['asset', 'symptom'], 3: ['area', 'locationDetail'], 4: ['detail'] };
+  var STEP_FIELDS = { 1: ['photos'], 2: ['asset', 'symptom'], 3: ['area', 'locationDetail'], 4: ['detail', 'notiNo', 'sapShortText'] };
   var MIC_HINT = 'กดไมค์บนแป้นพิมพ์เพื่อพูดแทนพิมพ์ได้';
 
   // แบบร่างเก็บในเครื่อง (รวมรูป) ปิดแอปกลางคันแล้วเปิดใหม่ยังอยู่ · ที่เก็บเต็มหรือถูกปิดก็ใช้ต่อได้แค่ไม่มีแบบร่าง
@@ -435,17 +435,37 @@
     return body;
   }
 
-  // ช่องพิมพ์ที่ผูกกับค่าในแบบร่าง พร้อมคำแนะนำไมค์ใต้ช่อง
-  function textField(form, me, draft, key, name, labelText, placeholder, onChange) {
+  // ช่องพิมพ์ที่ผูกกับค่าใน state พร้อมคำแนะนำไมค์ใต้ช่อง persist คือบันทึกแบบร่าง (หน้าแก้งานส่งฟังก์ชันว่าง)
+  function textField(form, persist, state, key, name, labelText, placeholder, onChange) {
     var control = field(form, name, labelText, input('text', placeholder));
-    control.value = draft[key] || '';
+    control.value = state[key] || '';
     control.addEventListener('input', function () {
-      draft[key] = control.value;
-      saveDraft(me, draft);
+      state[key] = control.value;
+      persist();
       if (onChange) onChange();
     });
     control.parentNode.insertBefore(el('small', 'hint', MIC_HINT), control.nextSibling);
     return control;
+  }
+
+  // ช่องพิมพ์หลายบรรทัด พร้อมคำแนะนำไมค์ onInput ได้ข้อความทุกครั้งที่พิมพ์
+  function textArea(form, name, labelText, placeholder, value, onInput) {
+    var box = el('div', 'field');
+    box.dataset.field = name;
+    var area = el('textarea');
+    area.id = 'f-' + name;
+    area.rows = 3;
+    area.placeholder = placeholder;
+    area.value = value || '';
+    area.addEventListener('input', function () { onInput(area.value); });
+    var label = el('label', '', labelText);
+    label.htmlFor = area.id;
+    box.appendChild(label);
+    box.appendChild(area);
+    box.appendChild(el('small', 'hint', MIC_HINT));
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+    return area;
   }
 
   // รายการคำแนะนำใต้ช่องพิมพ์ กรองตามที่พิมพ์ (ไม่ใช้ datalist เพราะบนมือถือแสดงไม่เหมือนกัน)
@@ -488,169 +508,38 @@
     body.appendChild(row);
   }
 
-  function showNewJob(me) {
-    loading('แจ้งงานใหม่');
-    api('reportOptions')
-      .then(function (res) {
-        if (!res.ok) return showError(res.error.message);
-        var draft = loadDraft(me);
-        if (!draft || !draft.clientRequestId) {
-          draft = {
-            clientRequestId: newRequestId(),
-            photos: [],
-            areaCode: res.data.lastAreaCode || '',
-            areaOther: res.data.lastAreaOther || '',
-          };
-        }
-        showReportStep(me, res.data, draft, draft.step || 1);
-      })
-      .catch(function () { showError('โหลดหน้าแจ้งงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
-  }
-
-  function showReportStep(me, options, draft, step) {
-    draft.step = step;
-    saveDraft(me, draft);
-    var main = screen('แจ้งงานใหม่');
-    var rerender = function () { showReportStep(me, options, draft, step); };
-
-    var progress = el('div', 'progress');
-    progress.appendChild(el('span', 'muted', 'ขั้น ' + step + ' จาก 4'));
-    var bar = el('div', 'progress-bar');
-    bar.appendChild(el('div', 'progress-fill')).style.width = (step * 25) + '%';
-    progress.appendChild(bar);
-    main.appendChild(progress);
-
-    var form = el('form', 'card');
-    form.noValidate = true;
-    var check = function () { return Core.validateJob(draft, options); };
-    var buildInfo = null;
-
-    if (step === 1) {
-      form.appendChild(el('h1', '', 'ถ่ายรูปอาการ'));
-      var body = group(form, 'photos', 'รูป 1–3 รูป *');
-      var thumbs = el('div', 'thumbs');
-      for (var i = 0; i < Core.PHOTO_MAX_COUNT; i++) thumbs.appendChild(photoCell(i));
-      body.appendChild(thumbs);
-      var camera = fileInput(false);
-      camera.setAttribute('capture', 'environment');
-      var album = fileInput(true);
-      var full = draft.photos.length >= Core.PHOTO_MAX_COUNT;
-      var cameraButton = el('button', 'primary', 'ถ่ายรูป');
-      cameraButton.type = 'button';
-      cameraButton.disabled = full;
-      cameraButton.addEventListener('click', function () { openCamera(); });
-      var albumButton = el('button', 'link', 'หรือเลือกจากอัลบั้ม');
-      albumButton.type = 'button';
-      albumButton.disabled = full;
-      albumButton.addEventListener('click', function () { album.click(); });
-      body.appendChild(cameraButton);
-      body.appendChild(albumButton);
-      body.appendChild(camera);
-      body.appendChild(album);
-      body.appendChild(el('p', 'notice', 'ถ้าทำได้ ถ่าย 1 รูปให้เห็นรอบ ๆ ด้วย ช่างจะหาเจอง่ายขึ้น'));
-      // เลขรุ่นแอปและสถานะกล้องในแอป ตัวเล็กสีจาง ใช้ถามผู้ใช้ตอนกล้องมีปัญหา (Android บางเครื่อง LINE ไม่ให้ใช้กล้องในแอป)
-      var inAppCamera = navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'รองรับ' : 'ไม่รองรับ';
-      buildInfo = el('p', 'build-info', 'รุ่น ' + (CONFIG.BUILD || 'dev') + ' · กล้องในแอป: ' + inAppCamera);
-    }
-
-    if (step === 2) {
-      form.appendChild(el('h1', '', 'อะไรเสีย เกิดอะไรขึ้น'));
-      var title = el('p', 'notice');
-      var showTitle = function () {
-        var value = check().value.title;
-        title.textContent = 'ชื่องาน: ' + (value || '-');
-      };
-      var asset = textField(form, me, draft, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
-      suggestions(asset, options.assetSuggestions || []);
-      var symptoms = group(form, 'symptom', 'เกิดอะไรขึ้น *');
-      chips(symptoms, options.symptoms.map(function (s) { return { code: s.code, text: s.label }; }), draft.symptomCode,
-        function (code) { draft.symptomCode = code; rerender(); });
-      if (draft.symptomCode === Core.OTHER) {
-        textField(form, me, draft, 'symptomOther', 'symptomOther', 'พิมพ์อาการ', 'เช่น มีกลิ่นไหม้', showTitle);
-      }
-      form.appendChild(title);
-      showTitle();
-    }
-
-    if (step === 3) {
-      form.appendChild(el('h1', '', 'อยู่ที่ไหน'));
-      var areas = group(form, 'area', 'พื้นที่ *');
-      chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), draft.areaCode,
-        function (code) { draft.areaCode = code; rerender(); });
-      if (draft.areaCode === Core.OTHER) {
-        textField(form, me, draft, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
-      }
-      var spot = textField(form, me, draft, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
-      suggestions(spot, (options.locationSuggestions || {})[draft.areaCode] || []);
-    }
-
-    if (step === 4) {
-      form.appendChild(el('h1', '', 'ตรวจแล้วส่ง'));
-      var value = check().value;
-      var strip = el('div', 'thumbs small');
-      draft.photos.forEach(function (photo) {
-        var img = el('img');
-        img.src = photo;
-        img.alt = '';
-        strip.appendChild(img);
-      });
-      form.appendChild(summary('รูป', strip, 1));
-      form.appendChild(summary('ชื่องาน', el('span', '', value.title), 2));
-      form.appendChild(summary('พื้นที่', el('span', '', value.areaName), 3));
-      form.appendChild(summary('ตรงไหน', el('span', '', value.locationDetail), 3));
-      var detail = el('textarea');
-      detail.id = 'f-detail';
-      detail.rows = 3;
-      detail.placeholder = 'เช่น เริ่มรั่วตั้งแต่เช้า';
-      detail.value = draft.detail || '';
-      detail.addEventListener('input', function () { draft.detail = detail.value; saveDraft(me, draft); });
-      var detailBox = el('div', 'field');
-      detailBox.dataset.field = 'detail';
-      var detailLabel = el('label', '', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)');
-      detailLabel.htmlFor = detail.id;
-      detailBox.appendChild(detailLabel);
-      detailBox.appendChild(detail);
-      detailBox.appendChild(el('small', 'hint', MIC_HINT));
-      detailBox.appendChild(el('small', 'field-error'));
-      form.appendChild(detailBox);
-    }
-
-    var formError = el('p', 'error hidden');
-    form.appendChild(formError);
-    var nav = el('div', 'toolbar');
-    if (step > 1) {
-      var back = el('button', '', 'ย้อนกลับ');
-      back.type = 'button';
-      back.addEventListener('click', function () { showReportStep(me, options, draft, step - 1); });
-      nav.appendChild(back);
-    }
-    var next = el('button', 'primary', step < 4 ? 'ถัดไป' : 'ส่งงาน');
-    next.type = 'submit';
-    nav.appendChild(next);
-    form.appendChild(nav);
-    if (buildInfo) form.appendChild(buildInfo);
-
-    form.addEventListener('submit', function (event) {
-      event.preventDefault();
-      var result = check();
-      if (step < 4) {
-        var fields = pickFields(result.fields, STEP_FIELDS[step]);
-        showFieldErrors(form, fields);
-        if (Object.keys(fields).length) return;
-        showReportStep(me, options, draft, step + 1);
-        return;
-      }
-      // ขั้นสุดท้ายตรวจทุกข้อ ถ้าขั้นก่อนหน้ายังขาด พากลับไปขั้นนั้น
-      if (!result.ok && goToFirstError(result.fields)) return;
-      sendJob(me, options, draft, next, formError);
-    });
-
-    main.appendChild(form);
+  // ช่องรูป 1–3 รูป ใช้ทั้งแจ้งงาน แก้เสร็จหน้างาน และแนบรูปหลังซ่อม
+  // รูปย่อมีปุ่ม ✕ ลบ · ปุ่ม "ถ่ายรูป" เปิดกล้องในหน้าแอป · ลิงก์ "หรือเลือกจากอัลบั้ม"
+  // state.photos คือรายการรูป (data URL) · opts: label, save (บันทึกแบบร่าง ไม่ส่งได้), rerender (วาดหน้าใหม่หลังรูปเปลี่ยน)
+  // คืนกล่องเนื้อหาของช่อง ใส่คำแนะนำต่อท้ายได้
+  function photoField(form, state, opts) {
+    var save = opts.save || function () {};
+    var body = group(form, 'photos', opts.label);
+    var thumbs = el('div', 'thumbs');
+    for (var i = 0; i < Core.PHOTO_MAX_COUNT; i++) thumbs.appendChild(photoCell(i));
+    body.appendChild(thumbs);
+    var camera = fileInput(false);
+    camera.setAttribute('capture', 'environment');
+    var album = fileInput(true);
+    var full = state.photos.length >= Core.PHOTO_MAX_COUNT;
+    var cameraButton = el('button', 'primary', 'ถ่ายรูป');
+    cameraButton.type = 'button';
+    cameraButton.disabled = full;
+    cameraButton.addEventListener('click', function () { openCamera(); });
+    var albumButton = el('button', 'link', 'หรือเลือกจากอัลบั้ม');
+    albumButton.type = 'button';
+    albumButton.disabled = full;
+    albumButton.addEventListener('click', function () { album.click(); });
+    body.appendChild(cameraButton);
+    body.appendChild(albumButton);
+    body.appendChild(camera);
+    body.appendChild(album);
+    return body;
 
     // ช่องรูปย่อ 1 ช่อง มีรูปแล้วแสดงปุ่ม ✕ ลบ
     function photoCell(index) {
       var cell = el('div', 'thumb');
-      var photo = draft.photos[index];
+      var photo = state.photos[index];
       if (!photo) return cell;
       var img = el('img');
       img.src = photo;
@@ -659,8 +548,9 @@
       remove.type = 'button';
       remove.setAttribute('aria-label', 'ลบรูปที่ ' + (index + 1));
       remove.addEventListener('click', function () {
-        draft.photos.splice(index, 1);
-        rerender();
+        state.photos.splice(index, 1);
+        save();
+        opts.rerender();
       });
       cell.appendChild(img);
       cell.appendChild(remove);
@@ -678,7 +568,7 @@
     }
 
     function addPhotos(files) {
-      var room = Core.PHOTO_MAX_COUNT - draft.photos.length;
+      var room = Core.PHOTO_MAX_COUNT - state.photos.length;
       var picked = Array.prototype.slice.call(files || [], 0, room);
       if (!picked.length) return;
       var dropped = files.length > picked.length;
@@ -686,15 +576,16 @@
       cameraButton.textContent = 'กำลังย่อรูป…';
       Promise.all(picked.map(resizePhoto))
         .then(function (photos) {
-          draft.photos = draft.photos.concat(photos);
-          rerender();
+          photos.forEach(function (p) { state.photos.push(p); });
+          save();
+          opts.rerender();
           if (dropped) {
             showFieldErrors(document.querySelector('form'),
               { photos: 'แนบได้ไม่เกิน ' + Core.PHOTO_MAX_COUNT + ' รูป ใช้เฉพาะรูปแรก ๆ ที่เลือก' });
           }
         })
         .catch(function () {
-          rerender();
+          opts.rerender();
           showFieldErrors(document.querySelector('form'), { photos: 'อ่านรูปไม่ได้ ลองถ่ายใหม่อีกครั้ง' });
         });
     }
@@ -738,12 +629,12 @@
       function close() {
         if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
         overlay.remove();
-        rerender();
+        opts.rerender();
       }
       function update() {
-        count.textContent = 'รูป ' + draft.photos.length + '/' + Core.PHOTO_MAX_COUNT;
+        count.textContent = 'รูป ' + state.photos.length + '/' + Core.PHOTO_MAX_COUNT;
         strip.innerHTML = '';
-        draft.photos.forEach(function (photo) {
+        state.photos.forEach(function (photo) {
           var img = el('img');
           img.src = photo;
           img.alt = '';
@@ -765,12 +656,12 @@
         canvas.width = Math.round(video.videoWidth * scale);
         canvas.height = Math.round(video.videoHeight * scale);
         canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-        draft.photos.push(canvas.toDataURL('image/jpeg', Core.PHOTO_QUALITY));
-        saveDraft(me, draft);
+        state.photos.push(canvas.toDataURL('image/jpeg', Core.PHOTO_QUALITY));
+        save();
         overlay.classList.add('cam-flash');
         setTimeout(function () { overlay.classList.remove('cam-flash'); }, 150);
         update();
-        if (draft.photos.length >= Core.PHOTO_MAX_COUNT) close();
+        if (state.photos.length >= Core.PHOTO_MAX_COUNT) close();
       });
 
       navigator.mediaDevices.getUserMedia({
@@ -787,6 +678,169 @@
           fail('เปิดกล้องในแอปไม่ได้ (อาจยังไม่ได้อนุญาตให้ใช้กล้อง)');
         });
     }
+  }
+
+  function showNewJob(me) {
+    loading('แจ้งงานใหม่');
+    api('reportOptions')
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        var draft = loadDraft(me);
+        if (!draft || !draft.clientRequestId) {
+          draft = {
+            clientRequestId: newRequestId(),
+            photos: [],
+            areaCode: res.data.lastAreaCode || '',
+            areaOther: res.data.lastAreaOther || '',
+          };
+        }
+        showReportStep(me, res.data, draft, draft.step || 1);
+      })
+      .catch(function () { showError('โหลดหน้าแจ้งงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  function showReportStep(me, options, draft, step) {
+    draft.step = step;
+    saveDraft(me, draft);
+    var main = screen('แจ้งงานใหม่');
+    var rerender = function () { showReportStep(me, options, draft, step); };
+    var persist = function () { saveDraft(me, draft); };
+
+    var progress = el('div', 'progress');
+    progress.appendChild(el('span', 'muted', 'ขั้น ' + step + ' จาก 4'));
+    var bar = el('div', 'progress-bar');
+    bar.appendChild(el('div', 'progress-fill')).style.width = (step * 25) + '%';
+    progress.appendChild(bar);
+    main.appendChild(progress);
+
+    var form = el('form', 'card');
+    form.noValidate = true;
+    // ตรวจด้วยกติกาชุดเดียวกับ backend · งานแจ้งแทนที่ใส่เลข Noti ตรวจเลข Noti ด้วย (ใบงาน 12)
+    var check = function () {
+      var result = Core.validateJob(draft, options);
+      if (options.noti && String(draft.notiNo || '').trim()) {
+        var noti = Core.validateNoti(draft, { NOTI_DIGITS: options.noti.digits, SAP_SHORTTEXT_MAX: options.noti.sapMax });
+        Object.keys(noti.fields).forEach(function (k) { result.fields[k] = noti.fields[k]; });
+        result.ok = result.ok && noti.ok;
+      }
+      return result;
+    };
+    var buildInfo = null;
+
+    if (step === 1) {
+      form.appendChild(el('h1', '', 'ถ่ายรูปอาการ'));
+      var body = photoField(form, draft, { label: 'รูป 1–3 รูป *', save: persist, rerender: rerender });
+      body.appendChild(el('p', 'notice', 'ถ้าทำได้ ถ่าย 1 รูปให้เห็นรอบ ๆ ด้วย ช่างจะหาเจอง่ายขึ้น'));
+      // เลขรุ่นแอปและสถานะกล้องในแอป ตัวเล็กสีจาง ใช้ถามผู้ใช้ตอนกล้องมีปัญหา (Android บางเครื่อง LINE ไม่ให้ใช้กล้องในแอป)
+      var inAppCamera = navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'รองรับ' : 'ไม่รองรับ';
+      buildInfo = el('p', 'build-info', 'รุ่น ' + (CONFIG.BUILD || 'dev') + ' · กล้องในแอป: ' + inAppCamera);
+    }
+
+    if (step === 2) {
+      form.appendChild(el('h1', '', 'อะไรเสีย เกิดอะไรขึ้น'));
+      var title = el('p', 'notice');
+      var showTitle = function () {
+        var value = check().value.title;
+        title.textContent = 'ชื่องาน: ' + (value || '-');
+      };
+      var asset = textField(form, persist, draft, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
+      suggestions(asset, options.assetSuggestions || []);
+      var symptoms = group(form, 'symptom', 'เกิดอะไรขึ้น *');
+      chips(symptoms, options.symptoms.map(function (s) { return { code: s.code, text: s.label }; }), draft.symptomCode,
+        function (code) { draft.symptomCode = code; rerender(); });
+      if (draft.symptomCode === Core.OTHER) {
+        textField(form, persist, draft, 'symptomOther', 'symptomOther', 'พิมพ์อาการ', 'เช่น มีกลิ่นไหม้', showTitle);
+      }
+      form.appendChild(title);
+      showTitle();
+    }
+
+    if (step === 3) {
+      form.appendChild(el('h1', '', 'อยู่ที่ไหน'));
+      var areas = group(form, 'area', 'พื้นที่ *');
+      chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), draft.areaCode,
+        function (code) { draft.areaCode = code; rerender(); });
+      if (draft.areaCode === Core.OTHER) {
+        textField(form, persist, draft, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+      }
+      var spot = textField(form, persist, draft, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
+      suggestions(spot, (options.locationSuggestions || {})[draft.areaCode] || []);
+    }
+
+    if (step === 4) {
+      form.appendChild(el('h1', '', 'ตรวจแล้วส่ง'));
+      var value = check().value;
+      var strip = el('div', 'thumbs small');
+      draft.photos.forEach(function (photo) {
+        var img = el('img');
+        img.src = photo;
+        img.alt = '';
+        strip.appendChild(img);
+      });
+      form.appendChild(summary('รูป', strip, 1));
+      form.appendChild(summary('ชื่องาน', el('span', '', value.title), 2));
+      form.appendChild(summary('พื้นที่', el('span', '', value.areaName), 3));
+      form.appendChild(summary('ตรงไหน', el('span', '', value.locationDetail), 3));
+      if (options.noti) {
+        form.appendChild(el('p', 'notice', 'แจ้งแทนคนอื่น: ใส่ชื่อและเบอร์ของคนแจ้งจริงในรายละเอียด · ถ้าเปิด Noti ใน SAP แล้ว ใส่เลข Noti ด้านล่าง งานจะเข้าคิวรอซ่อมทันที'));
+      }
+      textArea(form, 'detail', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)', options.noti ? 'เช่น คุณสมมุติ 0812345678 โทรมาแจ้ง' : 'เช่น เริ่มรั่วตั้งแต่เช้า',
+        draft.detail, function (text) { draft.detail = text; persist(); });
+      if (options.noti) {
+        var notiNo = field(form, 'notiNo', 'เลข Noti (ถ้าเปิดใน SAP แล้ว)', input('text', options.noti.digits + ' หลัก'), true);
+        notiNo.inputMode = 'numeric';
+        notiNo.autocomplete = 'off';
+        notiNo.value = draft.notiNo || '';
+        var sap = field(form, 'sapShortText', 'ชื่องาน SAP', input('text', ''));
+        sap.maxLength = options.noti.sapMax;
+        sap.value = draft.sapShortText || '';
+        var sapBox = sap.parentNode;
+        sapBox.classList.toggle('hidden', !String(draft.notiNo || '').trim());
+        notiNo.addEventListener('input', function () {
+          draft.notiNo = notiNo.value;
+          var has = Boolean(notiNo.value.trim());
+          if (has && !draft.sapShortText) {
+            draft.sapShortText = Core.sapShortText(value.title, value.areaName, value.locationDetail, { SAP_SHORTTEXT_MAX: options.noti.sapMax });
+            sap.value = draft.sapShortText;
+          }
+          sapBox.classList.toggle('hidden', !has);
+          persist();
+        });
+        sap.addEventListener('input', function () { draft.sapShortText = sap.value; persist(); });
+      }
+    }
+
+    var formError = el('p', 'error hidden');
+    form.appendChild(formError);
+    var nav = el('div', 'toolbar');
+    if (step > 1) {
+      var back = el('button', '', 'ย้อนกลับ');
+      back.type = 'button';
+      back.addEventListener('click', function () { showReportStep(me, options, draft, step - 1); });
+      nav.appendChild(back);
+    }
+    var next = el('button', 'primary', step < 4 ? 'ถัดไป' : 'ส่งงาน');
+    next.type = 'submit';
+    nav.appendChild(next);
+    form.appendChild(nav);
+    if (buildInfo) form.appendChild(buildInfo);
+
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var result = check();
+      if (step < 4) {
+        var fields = pickFields(result.fields, STEP_FIELDS[step]);
+        showFieldErrors(form, fields);
+        if (Object.keys(fields).length) return;
+        showReportStep(me, options, draft, step + 1);
+        return;
+      }
+      // ขั้นสุดท้ายตรวจทุกข้อ ถ้าขั้นก่อนหน้ายังขาด พากลับไปขั้นนั้น
+      if (!result.ok && goToFirstError(result.fields)) return;
+      sendJob(me, options, draft, next, formError);
+    });
+
+    main.appendChild(form);
 
     // แถวสรุป 1 แถวในขั้น 4 พร้อมปุ่ม "แก้" กลับไปขั้นนั้น
     function summary(name, valueNode, backTo) {
@@ -838,6 +892,9 @@
       locationDetail: draft.locationDetail,
       detail: draft.detail,
       clientRequestId: draft.clientRequestId,
+      // งานแจ้งแทนพร้อมเลข Noti (เฉพาะหัวหน้ากะและแอดมิน backend ตรวจสิทธิ์ซ้ำ)
+      notiNo: options.noti ? draft.notiNo : undefined,
+      sapShortText: options.noti ? draft.sapShortText : undefined,
     })
       .then(function (res) {
         if (res.ok) {
@@ -863,9 +920,14 @@
   // ต้องเป็นข้อความตัวอักษร เพราะ Flex ที่ส่งจาก LIFF ไม่ทำให้เกิด webhook
   // ใช้ได้เฉพาะตอนเปิดแอปจากห้องแชท ส่งไม่ได้ก็ข้ามไปเงียบ ๆ หน้าสำเร็จแสดงเลขงานอยู่แล้ว
   function sendConfirmMessage(jobId) {
+    sendChatText('แจ้งงาน ' + jobId);
+  }
+
+  // ส่งข้อความตัวอักษรเข้าแชทในนามผู้ใช้ (ใบงาน 07 และ 13) ส่งไม่ได้ก็ข้ามไปเงียบ ๆ
+  function sendChatText(text) {
     try {
       if (!liff.isInClient()) return;
-      liff.sendMessages([{ type: 'text', text: 'แจ้งงาน ' + jobId }]).catch(function () { /* ข้ามไปเงียบ ๆ */ });
+      liff.sendMessages([{ type: 'text', text: text }]).catch(function () { /* ข้ามไปเงียบ ๆ */ });
     } catch (e) { /* ข้ามไปเงียบ ๆ */ }
   }
 
@@ -877,7 +939,8 @@
     card.appendChild(el('p', 'muted', 'เลขงาน'));
     card.appendChild(el('p', 'job-id', job.jobId));
     card.appendChild(el('p', '', job.title));
-    card.appendChild(el('p', 'notice', 'หัวหน้ากะแผนก' + job.department + ' จะเปิด Noti ใน SAP ให้'));
+    card.appendChild(el('p', 'notice', job.status === 'IN_REPAIR' ? 'เปิด Noti แล้ว งานเข้าคิวรอซ่อมของช่างทันที'
+      : 'หัวหน้ากะแผนก' + job.department + ' จะเปิด Noti ใน SAP ให้'));
     var close = el('button', 'primary', 'กลับไปที่แชท');
     close.addEventListener('click', function () { liff.closeWindow(); });
     var again = el('button', '', 'แจ้งงานอีกงาน');
@@ -896,12 +959,12 @@
     ['เสร็จแล้ว', ['REPAIRED', 'CLOSED']],
   ];
 
-  function showMyJobs(me) {
+  function showMyJobs(me, filterIndex) {
     loading('งานของฉัน');
     api('listMyJobs')
       .then(function (res) {
         if (!res.ok) return showError(res.error.message);
-        renderMyJobs(me, res.data.jobs, 0);
+        renderMyJobs(me, res.data.jobs, filterIndex || 0);
       })
       .catch(function () { showError('โหลดงานของฉันไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
   }
@@ -928,7 +991,7 @@
       var item = el('button', 'job');
       item.type = 'button';
       item.addEventListener('click', function () {
-        showJob(me, job.jobId, function () { renderMyJobs(me, jobs, filterIndex); });
+        showJob(me, job.jobId, { label: '‹ งานของฉัน', go: function () { showMyJobs(me, filterIndex); } });
       });
       var label = Core.JOB_STATUS_LABEL[job.status] || [job.status, 'off'];
       var head = el('div', 'job-head');
@@ -957,31 +1020,54 @@
     SEND_BACK: 'ส่งกลับให้ช่าง',
   };
 
-  // onBack คือกลับไปหน้าที่เปิดมา (ไม่มีถ้าเปิดจากลิงก์ตรง)
-  function showJob(me, jobId, onBack) {
+  // nav คือหน้าที่เปิดมา { label, go(notice) } ใช้ทำปุ่มย้อนกลับ (ไม่มีถ้าเปิดจากลิงก์ตรง)
+  function showJob(me, jobId, nav, notice) {
     loading('รายละเอียดงาน');
     api('jobDetail', { jobId: jobId })
       .then(function (res) {
         if (!res.ok) return showError(res.error.message);
-        renderJob(me, res.data, onBack);
+        renderJob(me, res.data, nav, notice);
       })
       .catch(function () { showError('โหลดรายละเอียดงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
   }
 
-  function renderJob(me, data, onBack) {
+  // ปุ่มย้อนกลับด้านบนของหน้า
+  function backButton(main, nav) {
+    if (!nav) return;
+    var back = el('button', 'small back', nav.label);
+    back.type = 'button';
+    back.addEventListener('click', function () { nav.go(); });
+    main.appendChild(back);
+  }
+
+  // ป้ายสถานะ + ป้ายค้าง (หน้ารายละเอียด) งานที่ถูกส่งกลับใช้ป้ายส้ม "ส่งกลับ" แทน "กำลังซ่อม"
+  function statusBadges(status, overdue, sentBack) {
+    var box = el('span', 'badges');
+    var label = Core.JOB_STATUS_LABEL[status] || [status, 'off'];
+    box.appendChild(sentBack ? badge('ส่งกลับ', 'back') : badge(label[0], label[1]));
+    if (overdue && overdue.overdue) box.appendChild(badge('ค้างเกิน ' + overdue.limit, 'err'));
+    return box;
+  }
+
+  // ป้ายเดียวของงานในรายการ: ค้าง > ส่งกลับ > สถานะ
+  function listBadge(job, short) {
+    if (job.overdue) return badge(short ? 'ค้าง' : 'ค้างเกิน ' + job.overdueLimit, 'err');
+    if (job.sentBack) return badge('ส่งกลับ', 'back');
+    var label = Core.JOB_STATUS_LABEL[job.status] || [job.status, 'off'];
+    return badge(label[0], label[1]);
+  }
+
+  function renderJob(me, data, nav, notice) {
     var job = data.job;
     var main = screen('รายละเอียดงาน');
-    if (onBack) {
-      var back = el('button', 'small back', '‹ งานของฉัน');
-      back.type = 'button';
-      back.addEventListener('click', onBack);
-      main.appendChild(back);
-    }
+    backButton(main, nav);
+    if (notice) main.appendChild(el('p', 'success', notice));
+    // หน้านี้ในฐานะหน้าที่กลับมาได้ (จากฟอร์มแก้ เปิด Noti ยกเลิก ฯลฯ)
+    var self = { label: '‹ รายละเอียดงาน', go: function (n) { showJob(me, job.jobId, nav, n); } };
 
     var card = el('section', 'card');
-    var label = Core.JOB_STATUS_LABEL[job.status] || [job.status, 'off'];
     var head = el('div', 'job-head');
-    head.appendChild(badge(label[0], label[1]));
+    head.appendChild(statusBadges(job.status, data.overdue, data.sentBack));
     head.appendChild(el('small', 'muted', job.jobId));
     card.appendChild(head);
     card.appendChild(el('h1', '', job.title));
@@ -989,17 +1075,23 @@
     card.appendChild(row('อาการ', el('span', '', job.symptom)));
     card.appendChild(row('แจ้งโดย', el('span', '', [data.reporter.name, data.reporter.department].filter(Boolean).join(' · '))));
     card.appendChild(row('แจ้งเมื่อ', el('span', '', shortTime(job.createdAt) + ' · แจ้งมา ' + Core.ageText(job.createdAt, data.now))));
-    if (job.notiNo) card.appendChild(row('เลข Noti', el('span', 'mono', job.notiNo)));
+    if (job.notiNo) card.appendChild(row('เลข Noti', el('span', 'mono', Core.formatNoti(job.notiNo))));
+    if (job.sapShortText) card.appendChild(row('ชื่องาน SAP', el('span', '', job.sapShortText)));
+    if (job.cancelReason) card.appendChild(row('เหตุผลที่ยกเลิก', el('span', '', job.cancelReason)));
+    if (job.closedWithoutNoti) card.appendChild(row('ปิดงาน', el('span', '', 'แก้เสร็จหน้างาน ไม่เปิด Noti')));
     if (job.detail) card.appendChild(el('p', 'notice', job.detail));
+    if (data.sentBack) card.appendChild(el('p', 'sent-back', 'ส่งกลับให้ช่าง: ' + data.sentBack.note));
     main.appendChild(card);
 
     // รูปก่อนซ่อม (และหลังซ่อมรอบล่าสุดถ้ามี) วางคู่กัน แตะรูปดูเต็มจอ
     var photos = el('section', 'card');
-    var pair = el('div', data.photos.after.length ? 'photo-pair' : '');
+    var after = data.photos.after;
+    var afterTitle = job.closedWithoutNoti ? 'รูปหลังแก้' : data.photos.afterRounds > 1 ? 'หลังซ่อม รอบ ' + data.photos.afterRounds : 'รูปหลังซ่อม';
+    var pair = el('div', after.length ? 'photo-pair' : '');
     pair.appendChild(photoGroup(job.jobId, 'รูปอาการ', data.photos.before));
-    if (data.photos.after.length) pair.appendChild(photoGroup(job.jobId, 'รูปหลังซ่อม', data.photos.after));
+    if (after.length) pair.appendChild(photoGroup(job.jobId, afterTitle, after));
     photos.appendChild(pair);
-    if (job.repairNote) photos.appendChild(row('บันทึกของช่าง', el('span', '', job.repairNote)));
+    if (job.repairNote) photos.appendChild(row(job.closedWithoutNoti ? 'แก้อะไรไป' : 'บันทึกของช่าง', el('span', '', job.repairNote)));
     main.appendChild(photos);
 
     var history = el('section', 'card');
@@ -1008,7 +1100,9 @@
       var item = el('div', 'history');
       var text = (ACTION_LABEL[h.action] || h.action);
       var to = Core.JOB_STATUS_LABEL[h.toStatus];
-      if (to && h.action !== 'CREATE') text += ' → ' + to[0];
+      // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" แต่ไม่ใช่ "ซ่อมเสร็จ → ซ่อมเสร็จ")
+      var obvious = h.action === 'EDIT' || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
+      if (to && !obvious && text.indexOf(to[0]) < 0) text += ' → ' + to[0];
       item.appendChild(el('strong', '', text));
       item.appendChild(el('small', 'muted', shortTime(h.at) + (h.by ? ' · ' + h.by : '')));
       if (h.note) item.appendChild(el('small', '', h.note));
@@ -1017,12 +1111,714 @@
     if (!data.history.length) history.appendChild(el('p', 'muted', 'ยังไม่มีประวัติ'));
     main.appendChild(history);
 
+    // ปุ่มตามโรลและสถานะ (docs/design/UI.md ตารางหน้ารายละเอียดงาน) backend ตรวจสิทธิ์ซ้ำทุกคำสั่ง
+    var a = data.actions || {};
+    var actions = el('section', 'actions');
     // ปุ่มโทรหาผู้แจ้ง: backend ส่งเบอร์มาเฉพาะหัวหน้ากะ ช่าง และแอดมิน
     if (data.reporter.phone) {
       var call = el('a', 'button-link', 'โทรหาผู้แจ้ง');
       call.href = 'tel:' + data.reporter.phone;
-      main.appendChild(call);
+      actions.appendChild(call);
     }
+    if (data.edit && data.edit.allowed) {
+      actions.appendChild(actionButton('', 'แก้ไข' + (data.edit.hoursLeft ? ' (เหลือ ' + data.edit.hoursLeft + ' ชม.)' : ''),
+        function () { showEditJob(me, data, self); }));
+    }
+    if (a.addNoti) actions.appendChild(actionButton('primary', 'เปิด Noti', function () { showNotiForm(me, data, self); }));
+    if (a.fixOnSite) actions.appendChild(actionButton('', 'แก้เสร็จหน้างานแล้ว', function () { showFixOnSite(me, data, self); }));
+    if (a.repair) actions.appendChild(actionButton('primary', 'แนบรูปหลังซ่อม', function () { showAfterRepair(me, data, self); }));
+    if (a.close) closeControls(me, data, actions, self);
+    if (a.cancel) actions.appendChild(actionButton('danger', 'ยกเลิกงาน', function () { showCancel(me, data, self); }));
+    if (actions.childNodes.length) main.appendChild(actions);
+  }
+
+  function actionButton(kind, label, onClick) {
+    var b = el('button', kind, label);
+    b.type = 'button';
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  // ปิดงาน (ใบงาน 14): ต้องติ๊ก "ตรวจหน้างานกับผู้แจ้งแล้ว" ก่อน กดโดยไม่ติ๊กขึ้นข้อความเตือน ไม่ปิดปุ่มเป็นสีเทา
+  function closeControls(me, data, actions, self) {
+    var job = data.job;
+    var box = el('div', 'field');
+    box.dataset.field = 'checked';
+    var label = el('label', 'choice');
+    var tick = document.createElement('input');
+    tick.type = 'checkbox';
+    label.appendChild(tick);
+    label.appendChild(el('span', '', 'ตรวจหน้างานกับผู้แจ้งแล้ว'));
+    box.appendChild(label);
+    var warn = el('small', 'field-error');
+    box.appendChild(warn);
+    actions.appendChild(box);
+    var close = actionButton('primary', 'ปิดงาน', function () {
+      if (!tick.checked) { warn.textContent = 'ติ๊ก "ตรวจหน้างานกับผู้แจ้งแล้ว" ก่อนปิดงาน'; return; }
+      warn.textContent = '';
+      close.disabled = true;
+      close.textContent = 'กำลังปิดงาน…';
+      api('closeJob', { jobId: job.jobId, checked: true })
+        .then(function (res) {
+          if (!res.ok) { warn.textContent = res.error.message; close.disabled = false; close.textContent = 'ปิดงาน'; return; }
+          showQueue(me, 'close', 'ปิดงาน ' + job.jobId + ' แล้ว');
+        })
+        .catch(function () {
+          warn.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          close.disabled = false;
+          close.textContent = 'ปิดงาน';
+        });
+    });
+    tick.addEventListener('change', function () { if (tick.checked) warn.textContent = ''; });
+    actions.appendChild(close);
+    actions.appendChild(actionButton('', 'ส่งกลับให้ช่าง', function () { showSendBack(me, data, self); }));
+  }
+
+  // หัวการ์ดงานในหน้าฟอร์ม (เปิด Noti แก้เสร็จหน้างาน ยกเลิก แนบรูปหลังซ่อม ส่งกลับ): ชื่องาน ที่อยู่ ผู้แจ้ง รูปอาการรูปแรก
+  function jobSummary(me, data, nav) {
+    var job = data.job;
+    var card = el('section', 'card');
+    var head = el('div', 'job-head');
+    head.appendChild(statusBadges(job.status, data.overdue, data.sentBack));
+    head.appendChild(el('small', 'muted', job.jobId));
+    card.appendChild(head);
+    var line = el('div', 'qcard static');
+    if (data.photos.before.length) line.appendChild(thumbImage(job.jobId, data.photos.before[0], true));
+    var info = el('div', 'qinfo');
+    info.appendChild(el('strong', '', job.title));
+    info.appendChild(el('small', 'muted', [job.areaName, job.locationDetail, job.notiNo ? 'Noti ' + Core.formatNoti(job.notiNo) : ''].filter(Boolean).join(' · ')));
+    info.appendChild(el('small', 'muted', [data.reporter.name, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ')));
+    line.appendChild(info);
+    card.appendChild(line);
+    if (data.sentBack) card.appendChild(el('p', 'sent-back', 'ส่งกลับให้ช่าง: ' + data.sentBack.note));
+    var tools = el('div', 'toolbar');
+    if (data.reporter.phone) {
+      var call = el('a', 'button-link small', 'โทรหาผู้แจ้ง');
+      call.href = 'tel:' + data.reporter.phone;
+      tools.appendChild(call);
+    }
+    var more = el('button', 'small', 'ดูรายละเอียด');
+    more.type = 'button';
+    more.addEventListener('click', function () { showJob(me, job.jobId, nav); });
+    tools.appendChild(more);
+    card.appendChild(tools);
+    return card;
+  }
+
+  // ---------- แก้งาน (ใบงาน 09) ----------
+
+  function showEditJob(me, data, nav) {
+    loading('แก้ไขงาน');
+    api('reportOptions')
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        var job = data.job;
+        var options = res.data;
+        // พื้นที่และอาการเดิมที่ปิดใช้ไปแล้วต้องมีปุ่มให้เลือกค้างไว้ (backend ยอมรับค่าเดิมของงาน)
+        var hasArea = options.areas.some(function (a) { return a.code === job.areaCode; });
+        if (job.areaCode && job.areaCode !== Core.OTHER && !hasArea) options.areas = options.areas.concat([{ code: job.areaCode, name: job.areaName }]);
+        var hasSymptom = options.symptoms.some(function (x) { return x.code === job.symptomCode; });
+        if (job.symptomCode && job.symptomCode !== Core.OTHER && !hasSymptom) options.symptoms = options.symptoms.concat([{ code: job.symptomCode, label: job.symptom }]);
+        var state = {
+          asset: job.asset, symptomCode: job.symptomCode, symptomOther: job.symptomOther,
+          areaCode: job.areaCode, areaOther: job.areaOther, locationDetail: job.locationDetail, detail: job.detail,
+        };
+        renderEditJob(me, data, options, state, nav);
+      })
+      .catch(function () { showError('โหลดหน้าแก้ไขไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  function renderEditJob(me, data, options, state, nav, fields) {
+    var job = data.job;
+    var main = screen('แก้ไขงาน');
+    backButton(main, nav);
+    var rerender = function () { renderEditJob(me, data, options, state, nav); };
+    var nothing = function () {};
+    var check = function () {
+      var r = Core.validateJob(state, options);
+      delete r.fields.photos;
+      r.ok = Object.keys(r.fields).length === 0;
+      return r;
+    };
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'แก้ไข ' + job.jobId));
+    form.appendChild(el('p', 'muted', 'แก้รูปไม่ได้ ถ้ารูปผิด ให้หัวหน้ากะยกเลิกงาน (แจ้งผิด) แล้วแจ้งใหม่'));
+    var title = el('p', 'notice');
+    var showTitle = function () { title.textContent = 'ชื่องาน: ' + (check().value.title || '-'); };
+    var asset = textField(form, nothing, state, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
+    suggestions(asset, options.assetSuggestions || []);
+    var symptoms = group(form, 'symptom', 'เกิดอะไรขึ้น *');
+    chips(symptoms, options.symptoms.map(function (x) { return { code: x.code, text: x.label }; }), state.symptomCode,
+      function (code) { state.symptomCode = code; rerender(); });
+    if (state.symptomCode === Core.OTHER) {
+      textField(form, nothing, state, 'symptomOther', 'symptomOther', 'พิมพ์อาการ', 'เช่น มีกลิ่นไหม้', showTitle);
+    }
+    form.appendChild(title);
+    showTitle();
+    var areas = group(form, 'area', 'พื้นที่ *');
+    chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), state.areaCode,
+      function (code) { state.areaCode = code; rerender(); });
+    if (state.areaCode === Core.OTHER) textField(form, nothing, state, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+    var spot = textField(form, nothing, state, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
+    suggestions(spot, (options.locationSuggestions || {})[state.areaCode] || []);
+    textArea(form, 'detail', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)', 'เช่น เริ่มรั่วตั้งแต่เช้า', state.detail, function (text) { state.detail = text; });
+    var formError = el('p', 'error hidden');
+    form.appendChild(formError);
+    var tools = el('div', 'toolbar');
+    tools.appendChild(actionButton('', 'ยกเลิก', function () { nav.go(); }));
+    var save = el('button', 'primary', 'บันทึก');
+    save.type = 'submit';
+    tools.appendChild(save);
+    form.appendChild(tools);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var result = check();
+      showFieldErrors(form, result.fields);
+      if (!result.ok) return;
+      save.disabled = true;
+      save.textContent = 'กำลังบันทึก…';
+      formError.classList.add('hidden');
+      api('editJob', Object.assign({ jobId: job.jobId }, state))
+        .then(function (res) {
+          if (res.ok) return nav.go(res.data.changed ? 'บันทึกการแก้ไขแล้ว' : 'ไม่มีอะไรเปลี่ยน');
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          formError.textContent = res.error.message;
+          formError.classList.remove('hidden');
+          save.disabled = false;
+          save.textContent = 'บันทึก';
+        })
+        .catch(function () {
+          formError.textContent = 'บันทึกไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          formError.classList.remove('hidden');
+          save.disabled = false;
+          save.textContent = 'บันทึก';
+        });
+    });
+    main.appendChild(form);
+    if (fields) showFieldErrors(form, fields);
+  }
+
+  // ---------- เปิด Noti (ใบงาน 10) ----------
+
+  // เปิดฟอร์มกรอกเลข Noti จากคิว (โหลดรายละเอียดงานก่อน) ถ้างานนี้กรอกไม่ได้แล้ว แสดงรายละเอียดแทน
+  function openNotiForm(me, jobId, nav, notice) {
+    loading('กรอกเลข Noti');
+    api('jobDetail', { jobId: jobId })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        if (res.data.noti) showNotiForm(me, res.data, nav, notice);
+        else renderJob(me, res.data, nav, notice);
+      })
+      .catch(function () { showError('โหลดงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  // values = { notiNo, sapShortText } ค่าที่กรอกไว้ (กลับมาแก้จากหน้ายืนยันแล้วไม่หาย)
+  function showNotiForm(me, data, nav, notice, values, fields) {
+    var job = data.job;
+    var noti = data.noti;
+    values = values || { notiNo: '', sapShortText: noti.sapDefault };
+    var main = screen('กรอกเลข Noti');
+    backButton(main, nav);
+    if (notice) main.appendChild(el('p', 'success', notice));
+    // ปุ่มแก้เสร็จหน้างานและยกเลิกจากหน้านี้ ทำเสร็จแล้วไปงานถัดไปในคิว
+    var self = { label: '‹ กรอกเลข Noti', queue: 'noti', go: function (n) { showNotiForm(me, data, nav, n, values); } };
+    main.appendChild(jobSummary(me, data, self));
+
+    var form = el('form', 'card');
+    form.noValidate = true;
+    var number = field(form, 'notiNo', 'เลข Noti (' + noti.digits + ' หลัก)', input('text', ''));
+    number.inputMode = 'numeric';
+    number.autocomplete = 'off';
+    number.className = 'mono big-input';
+    number.value = values.notiNo;
+    number.addEventListener('input', function () { values.notiNo = number.value; });
+    var sap = field(form, 'sapShortText', 'ชื่องาน SAP (เติมให้แล้ว แก้ได้)', input('text', ''));
+    sap.maxLength = noti.sapMax;
+    sap.value = values.sapShortText;
+    var counter = el('small', 'hint', '');
+    var count = function () { counter.textContent = sap.value.length + '/' + noti.sapMax + ' ตัวอักษร'; };
+    sap.addEventListener('input', function () { values.sapShortText = sap.value; count(); });
+    sap.parentNode.insertBefore(counter, sap.nextSibling);
+    count();
+    var next = el('button', 'primary', 'ถัดไป');
+    next.type = 'submit';
+    form.appendChild(next);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var result = Core.validateNoti(values, { NOTI_DIGITS: noti.digits, SAP_SHORTTEXT_MAX: noti.sapMax });
+      showFieldErrors(form, result.fields);
+      if (result.ok) showNotiConfirm(me, data, nav, result.value);
+    });
+    main.appendChild(form);
+    if (fields) showFieldErrors(form, fields);
+
+    var others = el('section', 'actions');
+    if (data.actions.fixOnSite) others.appendChild(actionButton('', 'แก้เสร็จหน้างานแล้ว', function () { showFixOnSite(me, data, self); }));
+    if (data.actions.cancel) others.appendChild(actionButton('danger', 'ยกเลิกงานนี้', function () { showCancel(me, data, self); }));
+    if (others.childNodes.length) main.appendChild(others);
+  }
+
+  // หน้ายืนยันเลข Noti ตัวใหญ่ แบ่งทีละ 4 หลัก ให้เทียบกับหน้าจอ SAP ก่อนบันทึก
+  function showNotiConfirm(me, data, nav, values) {
+    var job = data.job;
+    var main = screen('ยืนยันเลข Noti');
+    var card = el('section', 'card done');
+    card.appendChild(el('h1', '', 'ยืนยันเลข Noti'));
+    card.appendChild(el('p', 'muted', 'เทียบกับหน้าจอ SAP ให้ตรงกัน'));
+    card.appendChild(el('p', 'noti-big', Core.formatNoti(values.notiNo)));
+    card.appendChild(el('p', '', values.sapShortText));
+    card.appendChild(el('p', 'muted', job.jobId + ' · ' + job.title));
+    var error = el('p', 'error hidden');
+    var save = actionButton('primary', 'บันทึก แล้วไปงานถัดไป', function () {
+      save.disabled = true;
+      save.textContent = 'กำลังบันทึก…';
+      error.classList.add('hidden');
+      api('addNoti', { jobId: job.jobId, notiNo: values.notiNo, sapShortText: values.sapShortText })
+        .then(function (res) {
+          if (res.ok) return goToNextNoti(me, 'บันทึก Noti ' + Core.formatNoti(values.notiNo) + ' ของ ' + job.jobId + ' แล้ว');
+          if (res.error.details && res.error.details.fields) return showNotiForm(me, data, nav, null, values, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          save.disabled = false;
+          save.textContent = 'บันทึก แล้วไปงานถัดไป';
+        })
+        .catch(function () {
+          error.textContent = 'บันทึกไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          save.disabled = false;
+          save.textContent = 'บันทึก แล้วไปงานถัดไป';
+        });
+    });
+    card.appendChild(save);
+    card.appendChild(actionButton('', 'กลับไปแก้', function () { showNotiForm(me, data, nav, null, values); }));
+    card.appendChild(error);
+    main.appendChild(card);
+  }
+
+  // หลังบันทึก ไปงานถัดไปในคิวรอเปิด Noti ทันที (เก่าสุดก่อน) ไม่มีงานเหลือแสดงคิวว่าง
+  function goToNextNoti(me, notice) {
+    loading('รอเปิด Noti');
+    var queueNav = { label: '‹ รอเปิด Noti', go: function (n) { showQueue(me, 'noti', n); } };
+    api('listJobs', { view: 'noti' })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        if (!res.data.jobs.length) return renderQueue(me, 'noti', res.data, notice + ' · ไม่มีงานรอเปิด Noti แล้ว');
+        openNotiForm(me, res.data.jobs[0].jobId, queueNav, notice + ' · งานถัดไป');
+      })
+      .catch(function () { showError('โหลดคิวไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  // ทำเสร็จแล้วกลับไปไหน: มาจากฟอร์มเปิด Noti (คิว) ไปงานถัดไป · มาจากรายละเอียดงานกลับไปหน้ารายละเอียด
+  function afterDone(me, nav, notice) {
+    if (nav && nav.queue === 'noti') return goToNextNoti(me, notice);
+    if (nav) return nav.go(notice);
+    showStatus(me, notice);
+  }
+
+  // ---------- ยกเลิกงาน (ใบงาน 11) ----------
+
+  function showCancel(me, data, nav) {
+    var job = data.job;
+    var reasons = data.actions.cancelReasons || [];
+    var main = screen('ยกเลิกงาน');
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'ยกเลิกงาน'));
+    var box = el('fieldset', 'field');
+    box.dataset.field = 'reason';
+    box.appendChild(el('legend', '', 'เหตุผล *'));
+    reasons.forEach(function (code) {
+      var option = el('label', 'choice');
+      var radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'reason';
+      radio.value = code;
+      option.appendChild(radio);
+      option.appendChild(el('span', '', Core.CANCEL_REASON[code]));
+      box.appendChild(option);
+    });
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+    var ref = field(form, 'refJobId', 'เลขงานที่ซ้ำ', input('text', 'เช่น R-2610-009'));
+    ref.autocapitalize = 'characters';
+    var refBox = ref.parentNode;
+    refBox.classList.add('hidden');
+    var noteValue = '';
+    var note = textArea(form, 'note', 'หมายเหตุ (ไม่บังคับ)', 'เช่น แจ้งซ้ำกับกะเช้า', '', function (text) { noteValue = text; });
+    var noteLabel = note.parentNode.querySelector('label');
+    if (data.actions.fixOnSite) form.appendChild(el('p', 'notice', 'ถ้าแก้เสร็จหน้างานแล้ว ไม่ต้องยกเลิก ใช้ปุ่ม "แก้เสร็จหน้างานแล้ว" แทน'));
+    box.addEventListener('change', function () {
+      var picked = form.querySelector('input[name="reason"]:checked');
+      var code = picked ? picked.value : '';
+      refBox.classList.toggle('hidden', code !== 'DUPLICATE');
+      noteLabel.textContent = code === 'OTHER' ? 'เหตุผล *' : 'หมายเหตุ (ไม่บังคับ)';
+    });
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'danger', 'ยกเลิกงาน');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var picked = form.querySelector('input[name="reason"]:checked');
+      var payload = { jobId: job.jobId, reason: picked ? picked.value : '', refJobId: ref.value.trim().toUpperCase(), note: noteValue.trim() };
+      var fields = {};
+      if (!payload.reason) fields.reason = 'กรุณาเลือกเหตุผล';
+      if (payload.reason === 'DUPLICATE' && !payload.refJobId) fields.refJobId = 'กรุณาใส่เลขงานที่ซ้ำ';
+      if (payload.reason === 'OTHER' && !payload.note) fields.note = 'กรุณาบอกเหตุผล';
+      showFieldErrors(form, fields);
+      if (Object.keys(fields).length) return;
+      if (!window.confirm('ยกเลิกงาน ' + job.jobId + '? ยกเลิกแล้วเปลี่ยนกลับไม่ได้')) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังยกเลิก…';
+      error.classList.add('hidden');
+      api('cancelJob', payload)
+        .then(function (res) {
+          if (res.ok) return afterDone(me, nav, 'ยกเลิกงาน ' + job.jobId + ' แล้ว');
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'ยกเลิกงาน';
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'ยกเลิกงาน';
+        });
+    });
+    main.appendChild(form);
+  }
+
+  // ---------- รูปหลังแก้/หลังซ่อม (ใบงาน 11 แก้เสร็จหน้างาน · ใบงาน 13 แนบรูปหลังซ่อม) ----------
+
+  // ฟอร์มรูป + บันทึก ใช้ร่วมกัน 2 หน้า opts: title, photoLabel, noteLabel, notePlaceholder, notice, button, action, done(res)
+  // state เก็บในหน่วยความจำ ถ้าส่งไม่สำเร็จ รูปและบันทึกยังอยู่ กดส่งซ้ำได้
+  function showRepairForm(me, data, nav, opts, state) {
+    state = state || { photos: [], note: '' };
+    var job = data.job;
+    var main = screen(opts.title);
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', opts.title));
+    photoField(form, state, { label: opts.photoLabel, rerender: function () { showRepairForm(me, data, nav, opts, state); } });
+    textArea(form, 'note', opts.noteLabel, opts.notePlaceholder, state.note, function (text) { state.note = text; });
+    if (opts.notice) form.appendChild(el('p', 'notice', opts.notice));
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', opts.button);
+    submit.type = 'submit';
+    form.appendChild(submit);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var check = Core.validateAfterRepair(state, opts.noteMissing);
+      showFieldErrors(form, check.fields);
+      if (!check.ok) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังส่ง…';
+      error.classList.add('hidden');
+      api(opts.action, { jobId: job.jobId, photos: state.photos, note: check.value.note })
+        .then(function (res) {
+          if (res.ok) return opts.done(res);
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = opts.button;
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกด "' + opts.button + '" อีกครั้ง รูปและบันทึกยังอยู่ครบ';
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = opts.button;
+        });
+    });
+    main.appendChild(form);
+  }
+
+  // แก้เสร็จหน้างาน: ปิดงานโดยไม่เปิด Noti (สวิตช์ ALLOW_CLOSE_WITHOUT_NOTI เปิด)
+  function showFixOnSite(me, data, nav) {
+    showRepairForm(me, data, nav, {
+      title: 'แก้เสร็จหน้างาน',
+      photoLabel: 'ถ่ายรูปหลังแก้ (บังคับ 1 รูป) *',
+      noteLabel: 'แก้อะไรไป (บังคับ)',
+      notePlaceholder: 'เช่น รีเซ็ตเบรกเกอร์',
+      noteMissing: 'กรุณาบอกว่าแก้อะไรไป',
+      notice: 'ปิดงานโดยไม่มีเลข Noti · ใช้ได้เมื่อแอดมินเปิดสวิตช์',
+      button: 'ปิดงาน',
+      action: 'closeWithoutNoti',
+      done: function () { afterDone(me, nav, 'ปิดงาน ' + data.job.jobId + ' แล้ว (แก้เสร็จหน้างาน)'); },
+    });
+  }
+
+  // แนบรูปหลังซ่อม: ช่างส่งแล้วได้การ์ดยืนยันในแชท (ส่ง "ซ่อมเสร็จ R-…" แล้ว webhook ตอบ)
+  function showAfterRepair(me, data, nav) {
+    showRepairForm(me, data, nav, {
+      title: 'แนบรูปหลังซ่อม',
+      photoLabel: 'รูปหลังซ่อม 1–3 รูป *',
+      noteLabel: 'ซ่อมอะไรไป (บังคับ)',
+      notePlaceholder: 'เช่น เปลี่ยนซีลปั๊ม',
+      noteMissing: 'กรุณาบอกว่าซ่อมอะไรไป',
+      button: 'ส่ง ซ่อมเสร็จ',
+      action: 'markRepaired',
+      done: function () {
+        sendChatText('ซ่อมเสร็จ ' + data.job.jobId);
+        showRepairDone(me, data.job);
+      },
+    });
+  }
+
+  function showRepairDone(me, job) {
+    var main = screen('ซ่อมเสร็จ');
+    var card = el('section', 'card done');
+    card.appendChild(el('div', 'done-mark', '✓'));
+    card.appendChild(el('p', 'muted', 'บันทึกซ่อมเสร็จแล้ว'));
+    card.appendChild(el('p', 'job-id', job.jobId));
+    card.appendChild(el('p', '', job.title));
+    card.appendChild(el('p', 'notice', 'หัวหน้ากะแผนก' + job.department + ' จะตรวจหน้างานกับผู้แจ้ง แล้วปิดงาน'));
+    card.appendChild(actionButton('primary', 'กลับไปที่แชท', function () { liff.closeWindow(); }));
+    card.appendChild(actionButton('', 'ดูงานรอซ่อม', function () { showQueue(me, 'repair'); }));
+    main.appendChild(card);
+  }
+
+  // ---------- ส่งกลับให้ช่าง (ใบงาน 14) ----------
+
+  function showSendBack(me, data, nav) {
+    var job = data.job;
+    var main = screen('ส่งกลับให้ช่าง');
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'ส่งกลับให้ช่าง'));
+    var reason = '';
+    textArea(form, 'reason', 'ยังไม่เรียบร้อยตรงไหน (บังคับ)', 'เช่น ยังมีน้ำซึมที่ข้อต่อด้านล่าง', '', function (text) { reason = text; });
+    form.appendChild(el('p', 'notice', 'งานกลับไปคิวรอซ่อมพร้อมป้าย "ส่งกลับ"'));
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', 'ส่งกลับ');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var fields = reason.trim() ? {} : { reason: 'กรุณาบอกว่ายังไม่เรียบร้อยตรงไหน' };
+      showFieldErrors(form, fields);
+      if (fields.reason) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังส่ง…';
+      error.classList.add('hidden');
+      api('sendBack', { jobId: job.jobId, reason: reason.trim() })
+        .then(function (res) {
+          if (res.ok) return showQueue(me, 'close', 'ส่ง ' + job.jobId + ' กลับให้ช่างแล้ว');
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'ส่งกลับ';
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'ส่งกลับ';
+        });
+    });
+    main.appendChild(form);
+  }
+
+  // ---------- คิวงาน (ใบงาน 10, 13, 14) และงานทั้งหมด (ใบงาน 15) ----------
+
+  var QUEUE_TITLE = { noti: 'รอเปิด Noti', close: 'รอปิดงาน', repair: 'งานรอซ่อม' };
+  var QUEUE_EMPTY = { noti: 'ไม่มีงานรอเปิด Noti', close: 'ไม่มีงานรอปิด', repair: 'ไม่มีงานรอซ่อม' };
+
+  function showQueue(me, view, notice) {
+    loading(QUEUE_TITLE[view]);
+    api('listJobs', { view: view })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        renderQueue(me, view, res.data, notice, '');
+      })
+      .catch(function () { showError('โหลดรายการไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  // area คือรหัสพื้นที่ที่กรองอยู่ (คิวรอซ่อม) ว่าง = ทุกพื้นที่
+  function renderQueue(me, view, data, notice, area) {
+    var main = screen(QUEUE_TITLE[view]);
+    if (notice) main.appendChild(el('p', 'success', notice));
+    var jobs = data.jobs;
+    var shown = jobs;
+    if (view === 'repair' && jobs.length) {
+      var seen = {};
+      var areas = [{ code: '', text: 'ทุกพื้นที่' }];
+      jobs.forEach(function (j) {
+        if (!seen[j.areaCode]) { seen[j.areaCode] = true; areas.push({ code: j.areaCode, text: j.areaName || '-' }); }
+      });
+      var bar = el('div', 'chips filters');
+      areas.forEach(function (a) {
+        var chip = el('button', 'chip', a.text);
+        chip.type = 'button';
+        chip.setAttribute('aria-pressed', String(a.code === area));
+        chip.addEventListener('click', function () { renderQueue(me, view, data, null, a.code); });
+        bar.appendChild(chip);
+      });
+      main.appendChild(bar);
+      if (area) shown = jobs.filter(function (j) { return j.areaCode === area; });
+    }
+    var card = el('section', 'card');
+    var head = el('div', 'card-head');
+    var scope = me.role === 'LEAD' ? me.department : 'ทุกแผนก';
+    head.appendChild(el('h1', '', QUEUE_TITLE[view] + ' · ' + scope + ' (' + shown.length + ')'));
+    head.appendChild(actionButton('small', 'โหลดใหม่', function () { showQueue(me, view); }));
+    card.appendChild(head);
+    if (!shown.length) card.appendChild(el('p', 'muted', QUEUE_EMPTY[view]));
+    var nav = { label: '‹ ' + QUEUE_TITLE[view], go: function (n) { showQueue(me, view, n); } };
+    shown.forEach(function (job) {
+      var item = el('button', 'qcard');
+      item.type = 'button';
+      item.appendChild(job.thumb ? thumbImage(job.jobId, job.thumb) : el('div', 'thumb'));
+      var info = el('div', 'qinfo');
+      var top = el('div', 'job-head');
+      top.appendChild(el('strong', '', job.title));
+      top.appendChild(listBadge(job));
+      info.appendChild(top);
+      info.appendChild(el('small', 'muted', [job.areaName, job.locationDetail].filter(Boolean).join(' · ')));
+      var meta = view === 'close'
+        ? 'ซ่อมเสร็จ ' + Core.ageText(job.repairedAt || job.since, data.now) + 'ก่อน' + (job.repairedBy ? ' · ช่าง ' + job.repairedBy : '')
+        : [job.reporterName, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ');
+      info.appendChild(el('small', 'muted', (me.role === 'LEAD' ? '' : job.department + ' · ') + meta));
+      item.appendChild(info);
+      item.addEventListener('click', function () {
+        if (view === 'noti') openNotiForm(me, job.jobId, nav);
+        else showJob(me, job.jobId, nav);
+      });
+      card.appendChild(item);
+    });
+    main.appendChild(card);
+  }
+
+  // ตัวกรองสถานะของหน้างานทั้งหมด (เริ่มต้น "ยังไม่จบ")
+  var ALL_FILTERS = [
+    ['ยังไม่จบ', Core.OPEN_STATUSES],
+    ['รอเปิด Noti', ['PENDING_NOTI']],
+    ['กำลังซ่อม', ['IN_REPAIR']],
+    ['ซ่อมเสร็จ', ['REPAIRED']],
+    ['ปิดงาน', ['CLOSED']],
+    ['ยกเลิก', ['CANCELLED']],
+    ['ทุกสถานะ', null],
+  ];
+
+  function showAllJobs(me, filters) {
+    loading('งานทั้งหมด');
+    api('listJobs', { view: 'all' })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        renderAllJobs(me, res.data, filters || { status: 0, department: '', area: '' });
+      })
+      .catch(function () { showError('โหลดงานทั้งหมดไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  function renderAllJobs(me, data, filters) {
+    var main = screen('งานทั้งหมด');
+    var rerender = function () { renderAllJobs(me, data, filters); };
+    var bar = el('div', 'filter-row');
+    bar.appendChild(filterSelect(ALL_FILTERS.map(function (f, i) { return [String(i), f[0]]; }), String(filters.status), function (v) {
+      filters.status = Number(v);
+      rerender();
+    }));
+    // หัวหน้ากะเห็นเฉพาะแผนกตัวเอง จึงไม่มีตัวกรองแผนก
+    if (me.role !== 'LEAD') {
+      var depts = unique(data.jobs.map(function (j) { return j.department; }).filter(Boolean)).sort();
+      bar.appendChild(filterSelect([['', 'ทุกแผนก']].concat(depts.map(function (d) { return [d, d]; })), filters.department, function (v) {
+        filters.department = v;
+        rerender();
+      }));
+    }
+    var areaNames = {};
+    data.jobs.forEach(function (j) { areaNames[j.areaCode] = j.areaName || '-'; });
+    bar.appendChild(filterSelect([['', 'ทุกพื้นที่']].concat(Object.keys(areaNames).map(function (c) { return [c, areaNames[c]]; })), filters.area, function (v) {
+      filters.area = v;
+      rerender();
+    }));
+    main.appendChild(bar);
+
+    var statuses = ALL_FILTERS[filters.status][1];
+    var shown = data.jobs.filter(function (j) {
+      return (!statuses || statuses.indexOf(j.status) >= 0) &&
+        (!filters.department || j.department === filters.department) &&
+        (!filters.area || j.areaCode === filters.area);
+    });
+    var card = el('section', 'card');
+    var head = el('div', 'card-head');
+    head.appendChild(el('h1', '', 'งานทั้งหมด (' + shown.length + ')'));
+    head.appendChild(actionButton('small', 'โหลดใหม่', function () { showAllJobs(me, filters); }));
+    card.appendChild(head);
+    if (!shown.length) card.appendChild(el('p', 'muted', 'ไม่มีงานในกลุ่มนี้'));
+    var nav = { label: '‹ งานทั้งหมด', go: function () { showAllJobs(me, filters); } };
+    shown.forEach(function (job) {
+      var item = el('button', 'job');
+      item.type = 'button';
+      item.addEventListener('click', function () { showJob(me, job.jobId, nav); });
+      var top = el('div', 'job-head');
+      top.appendChild(el('strong', '', job.title));
+      top.appendChild(listBadge(job, true));
+      item.appendChild(top);
+      var parts = me.role === 'LEAD' ? [] : [job.department];
+      item.appendChild(el('small', 'muted', parts.concat([job.areaName, Core.ageText(job.createdAt, data.now)]).filter(Boolean).join(' · ')));
+      item.appendChild(el('small', 'muted', job.jobId));
+      card.appendChild(item);
+    });
+    main.appendChild(card);
+  }
+
+  function filterSelect(options, value, onChange) {
+    var node = document.createElement('select');
+    options.forEach(function (o) {
+      var option = el('option', '', o[1]);
+      option.value = o[0];
+      option.selected = o[0] === value;
+      node.appendChild(option);
+    });
+    node.addEventListener('change', function () { onChange(node.value); });
+    return node;
+  }
+
+  function unique(values) {
+    return values.filter(function (v, i) { return values.indexOf(v) === i; });
+  }
+
+  // รูปจาก Drive ผ่าน API (รูปไม่มีลิงก์สาธารณะ) จำไว้ในหน้า เปิดซ้ำไม่โหลดใหม่
+  var photoCache = {};
+  function loadPhoto(jobId, fileId) {
+    if (!photoCache[fileId]) {
+      photoCache[fileId] = api('jobPhoto', { jobId: jobId, fileId: fileId }).then(function (res) {
+        if (!res.ok) throw new Error(res.error.message);
+        return res.data.photo;
+      });
+      photoCache[fileId].catch(function () { delete photoCache[fileId]; });
+    }
+    return photoCache[fileId];
+  }
+
+  // รูปย่อในรายการ (โหลดทีหลัง) zoom = แตะดูเต็มจอได้
+  function thumbImage(jobId, fileId, zoom) {
+    var cell = el('div', 'thumb loading');
+    loadPhoto(jobId, fileId)
+      .then(function (src) {
+        cell.classList.remove('loading');
+        var img = el('img');
+        img.src = src;
+        img.alt = '';
+        cell.appendChild(img);
+        if (zoom) cell.addEventListener('click', function () { showPhoto(src); });
+      })
+      .catch(function () { cell.classList.remove('loading'); });
+    return cell;
   }
 
   // กลุ่มรูป 1 กลุ่ม ขอรูปทีละรูปผ่าน API (รูปใน Drive ไม่มีลิงก์สาธารณะ)
@@ -1035,15 +1831,14 @@
       cell.type = 'button';
       cell.setAttribute('aria-label', title + ' รูปที่ ' + (i + 1));
       grid.appendChild(cell);
-      api('jobPhoto', { jobId: jobId, fileId: fileId })
-        .then(function (res) {
+      loadPhoto(jobId, fileId)
+        .then(function (src) {
           cell.classList.remove('loading');
-          if (!res.ok) { cell.textContent = 'โหลดไม่ได้'; return; }
           var img = el('img');
-          img.src = res.data.photo;
+          img.src = src;
           img.alt = '';
           cell.appendChild(img);
-          cell.addEventListener('click', function () { showPhoto(res.data.photo); });
+          cell.addEventListener('click', function () { showPhoto(src); });
         })
         .catch(function () { cell.classList.remove('loading'); cell.textContent = 'โหลดไม่ได้'; });
     });
@@ -1096,8 +1891,19 @@
     }
     if (page === 'my') return showMyJobs(me);
     if (page === 'job') return showJob(me, params.get('id'));
-    // หน้าที่ปุ่มเมนูเปิดได้แล้วแต่ยังไม่ได้สร้าง (ทำในใบงาน 07 เป็นต้นไป)
-    if (page) return showStatus(me, 'หน้านี้กำลังสร้าง จะเปิดใช้เร็ว ๆ นี้');
+    if (page === 'queue-noti' || page === 'queue-close') {
+      if (me.role === 'LEAD' || me.role === 'ADMIN') return showQueue(me, page.slice(6));
+      return showError('หน้านี้สำหรับหัวหน้ากะและแอดมิน');
+    }
+    if (page === 'queue-repair') {
+      if (['TECH', 'PLANNER', 'ADMIN'].indexOf(me.role) >= 0) return showQueue(me, 'repair');
+      return showError('หน้านี้สำหรับช่าง Planner และแอดมิน');
+    }
+    if (page === 'all') {
+      if (me.role !== 'STAFF') return showAllJobs(me);
+      return showError('หน้านี้สำหรับหัวหน้ากะ Planner ช่าง และแอดมิน');
+    }
+    if (page) return showStatus(me, 'ไม่พบหน้านี้');
     return showStatus(me);
   }
 

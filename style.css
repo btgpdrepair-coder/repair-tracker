@@ -1,17 +1,22 @@
-/* สี ฟอนต์ และขนาดตาม docs/mockup ปุ่มและช่องกรอกสูงอย่างน้อย 44 px */
+/* หน้าตาแบบ 3 (เขียวอมฟ้า โทนอ่อน) ตาม docs/design/UI.md
+   ตัวหนังสือ 17 px · ปุ่มหลัก 52 px · ทุกจุดที่แตะได้สูงอย่างน้อย 44 px */
 :root {
-  --primary: #1F5FAF;
-  --text: #1B2430;
-  --muted: #5B6470;
-  --line: #D3D8DE;
-  --bg: #EEF1F4;
+  --primary: #0B6E61;
+  --text: #18302B;
+  --muted: #557069;
+  --faint: #9DB3AE;
+  --line: #CFE3DE;
+  --bg: #F4F8F7;
   --surface: #FFFFFF;
-  --ok-bg: #E1F2E8;
-  --ok-text: #1C6B42;
-  --warn-bg: #FFF1D6;
+  --field: #EEF5F3;
+  --danger: #B42318;
+  /* สีสถานะชุดเดียวทั้งแอป */
+  --ok-bg: #E3F1D6;
+  --ok-text: #2F5E12;
+  --warn-bg: #FFF0D1;
   --warn-text: #7A4B00;
-  --err-bg: #FDE7E7;
-  --err-text: #A12828;
+  --err-bg: #FDE2E2;
+  --err-text: #9E2323;
 }
 
 * { box-sizing: border-box; }
@@ -21,23 +26,22 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: 'IBM Plex Sans Thai', 'Noto Sans Thai', sans-serif;
-  font-size: 15px;
+  font-size: 17px;
   line-height: 1.5;
 }
 
 .topbar {
-  height: 56px;
+  min-height: 60px;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 16px;
   background: var(--surface);
-  border-bottom: 1px solid var(--line);
 }
 
 .logo {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   background: var(--primary);
   display: flex;
@@ -47,92 +51,130 @@ body {
 }
 
 .title { display: flex; flex-direction: column; line-height: 1.3; }
-.title span { font-size: 16px; font-weight: 600; }
-.title small { font-size: 12px; color: var(--muted); }
+.title span { font-size: 17px; font-weight: 700; }
+.title small { font-size: 13px; color: var(--muted); }
 
-main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+main { padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: calc(100vh - 60px); }
 
 .card {
   background: var(--surface);
-  border-radius: 12px;
+  border-radius: 18px;
   padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
-.card h1 { font-size: 18px; margin: 0; }
-.muted { color: var(--muted); margin: 0; }
+.card h1 { font-size: 20px; margin: 0; }
+.muted { color: var(--muted); margin: 0; font-size: 15px; }
 
-.row { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.row { display: flex; justify-content: space-between; gap: 12px; font-size: 15px; }
 .row span:first-child { color: var(--muted); }
 
 .badge {
   display: inline-flex;
   align-items: center;
-  height: 24px;
+  height: 26px;
   padding: 0 10px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: 13px;
+  font-size: 13px;
+  font-weight: 700;
 }
 .badge.ok { background: var(--ok-bg); color: var(--ok-text); }
 .badge.warn { background: var(--warn-bg); color: var(--warn-text); }
 .badge.err { background: var(--err-bg); color: var(--err-text); }
 
-.error { background: var(--err-bg); color: var(--err-text); border-radius: 8px; padding: 12px; margin: 0; }
-.warning { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 12px; margin: 0; font-size: 14px; }
+.error { background: var(--err-bg); color: var(--err-text); border-radius: 14px; padding: 12px 14px; margin: 0; }
+.warning { background: var(--warn-bg); color: var(--warn-text); border-radius: 14px; padding: 12px 14px; margin: 0; font-size: 15px; }
 
+/* ปุ่ม: ปุ่มหลักทึบสีหลัก ปุ่มรองพื้นขาวเส้นขอบ ปุ่มเป็นแคปซูล */
 button {
-  min-height: 44px;
-  border-radius: 8px;
-  border: 1px solid var(--primary);
+  min-height: 52px;
+  border-radius: 26px;
+  border: 1px solid var(--line);
   background: var(--surface);
-  color: var(--primary);
+  color: var(--text);
   font: inherit;
-  font-weight: 600;
+  font-weight: 700;
+  padding: 0 18px;
 }
-button.primary { background: var(--primary); color: #FFFFFF; }
+button.primary { background: var(--primary); border-color: var(--primary); color: #FFFFFF; }
+button.danger { background: var(--danger); border-color: var(--danger); color: #FFFFFF; }
 button:disabled { opacity: 0.6; }
+button.small { min-height: 44px; padding: 0 16px; font-size: 15px; }
 
 .hidden { display: none; }
 
 /* ฟอร์ม */
 .field { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; }
-.field label, .field legend { font-size: 14px; font-weight: 600; padding: 0; }
+.field label:not(.choice), .field legend { font-size: 15px; font-weight: 700; padding: 0; }
 .field input[type="text"], .field input[type="tel"], .field select {
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 12px;
+  min-height: 52px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  padding: 0 14px;
   font: inherit;
-  background: var(--surface);
+  background: var(--field);
   color: var(--text);
 }
+.field input:focus, .field select:focus { outline: 2px solid var(--primary); outline-offset: 0; }
 .field.invalid input, .field.invalid select { border-color: var(--err-text); }
-.field-error { color: var(--err-text); font-size: 13px; min-height: 0; }
+.field-error { color: var(--err-text); font-size: 14px; }
 .field-error:empty { display: none; }
 
 .choice {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  min-height: 44px;
-  padding: 10px 12px;
+  gap: 12px;
+  min-height: 52px;
+  padding: 12px 14px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 14px;
   font-weight: 400;
+  background: var(--surface);
 }
-.choice input { width: 20px; height: 20px; margin: 2px 0 0; flex-shrink: 0; }
+.choice:has(input:checked) { border: 2px solid var(--primary); padding: 11px 13px; }
+.choice input { width: 22px; height: 22px; margin: 1px 0 0; flex-shrink: 0; accent-color: var(--primary); }
 .choice-text { display: flex; flex-direction: column; }
-.choice-text small { font-size: 13px; }
+.choice-text small { font-size: 14px; color: var(--muted); }
 fieldset.field .choice { margin-bottom: 8px; }
 
-button.small { min-height: 44px; padding: 0 14px; font-size: 14px; }
+.notice {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+  background: var(--field);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
 
 /* หน้าจัดการผู้ใช้ */
 .toolbar { display: flex; gap: 8px; }
 .toolbar button { flex: 1; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.person {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.person-info { display: flex; flex-direction: column; min-width: 0; }
+.person-info strong { font-size: 16px; }
+.person-info small { font-size: 14px; }
+.person-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.role-select {
+  min-height: 44px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 15px;
+  background: var(--field);
+  color: var(--text);
+  flex-shrink: 0;
+}
 
 /* QR เพิ่มเพื่อนเต็มจอ */
 .qr-overlay {
@@ -146,40 +188,10 @@ button.small { min-height: 44px; padding: 0 14px; font-size: 14px; }
   z-index: 10;
 }
 .qr-box { width: 100%; max-width: 360px; display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
-.qr-box h1 { margin: 0; font-size: 20px; }
+.qr-box h1 { margin: 0; font-size: 22px; }
 .qr-box img { width: 100%; max-width: 300px; aspect-ratio: 1; image-rendering: pixelated; }
-.qr-id { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: 0.5px; }
+.qr-id { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: 0.5px; }
 .qr-box button { width: 100%; }
 
-.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.person {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 0;
-  border-top: 1px solid var(--line);
-}
-.person-info { display: flex; flex-direction: column; min-width: 0; }
-.person-info strong { font-size: 15px; }
-.person-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.role-select {
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 8px;
-  font: inherit;
-  font-size: 14px;
-  background: var(--surface);
-  color: var(--text);
-  flex-shrink: 0;
-}
-
-.notice {
-  margin: 0;
-  font-size: 13px;
-  color: var(--muted);
-  background: var(--bg);
-  border-radius: 8px;
-  padding: 10px 12px;
-}
+/* ลายเซ็นล่างสุดของหน้า ตัวเล็กสีจาง */
+.signature { margin: auto 0 0; padding-top: 32px; text-align: center; font-size: 12px; color: var(--faint); }

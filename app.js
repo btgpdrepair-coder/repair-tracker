@@ -97,6 +97,8 @@
     if (me.realName) card.appendChild(row('ชื่อจริง', el('span', '', me.realName)));
     if (note) card.appendChild(el('p', 'muted', note));
     main.appendChild(card);
+    // ลายเซ็นผู้ทำ ตัวเล็กสีจางล่างสุดของหน้าแรก (docs/design/UI.md)
+    main.appendChild(el('p', 'signature', 'v1.0 · ออกแบบและพัฒนาโดย JABB'));
   }
 
   // หน้าลงทะเบียน (ตาม mockup Register.html)

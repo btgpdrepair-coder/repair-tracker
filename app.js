@@ -107,8 +107,8 @@
     var form = el('form', 'card');
     form.noValidate = true;
 
-    form.appendChild(el('h1', '', 'ครั้งแรกที่ใช้งาน'));
-    form.appendChild(el('p', 'muted', 'กรอกข้อมูลให้แอดมินอนุมัติ อนุมัติแล้วเมนูในแชทจะเปลี่ยนตามโรล'));
+    form.appendChild(el('h1', '', 'สวัสดี ' + (me.lineName || '')));
+    form.appendChild(el('p', 'muted', 'ครั้งแรกที่ใช้งาน กรอกข้อมูลให้แอดมินอนุมัติ อนุมัติแล้วเมนูในแชทจะเปลี่ยนตามโรล'));
     if (me.status === 'REJECTED') {
       form.appendChild(el('p', 'error', 'คำขอครั้งก่อนไม่ผ่าน แก้ข้อมูลแล้วส่งใหม่ได้ หรือติดต่อแอดมิน'));
     }

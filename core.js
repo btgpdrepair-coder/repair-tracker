@@ -179,6 +179,23 @@ var Core = (function () {
     return jobId + '_' + kind + (round > 1 ? round : '') + '_' + index + '.jpg';
   }
 
+  // อายุงานแบบสั้น เช่น "15 นาที" "3 ชม." "2 วัน" จากเวลาข้อความ YYYY-MM-DD HH:mm:ss สองค่า (เวลาไทยทั้งคู่)
+  function ageText(from, now) {
+    var a = parseTime(from);
+    var b = parseTime(now);
+    if (a === null || b === null) return '';
+    var minutes = Math.floor((b - a) / 60000);
+    if (minutes < 1) return 'ไม่ถึง 1 นาที';
+    if (minutes < 60) return minutes + ' นาที';
+    if (minutes < 24 * 60) return Math.floor(minutes / 60) + ' ชม.';
+    return Math.floor(minutes / (24 * 60)) + ' วัน';
+  }
+
+  function parseTime(value) {
+    var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(value || ''));
+    return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+  }
+
   // ชื่อพื้นที่ของงาน: "อื่น ๆ" ใช้ชื่อที่พิมพ์ ที่เหลือแปลงรหัสเป็นชื่อ (รวมพื้นที่ที่ปิดใช้แล้ว)
   // areas คือรายการ { code, name } จากชีต Areas
   function jobAreaName(job, areas) {
@@ -307,6 +324,7 @@ var Core = (function () {
     photoFileName: photoFileName,
     jobTitle: jobTitle,
     jobAreaName: jobAreaName,
+    ageText: ageText,
     validateJob: validateJob,
   };
 })();

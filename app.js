@@ -901,12 +901,12 @@
     api('listMyJobs')
       .then(function (res) {
         if (!res.ok) return showError(res.error.message);
-        renderMyJobs(res.data.jobs, 0);
+        renderMyJobs(me, res.data.jobs, 0);
       })
       .catch(function () { showError('โหลดงานของฉันไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
   }
 
-  function renderMyJobs(jobs, filterIndex) {
+  function renderMyJobs(me, jobs, filterIndex) {
     var main = screen('งานของฉัน');
     var bar = el('div', 'chips filters');
     MY_FILTERS.forEach(function (filter, index) {
@@ -914,7 +914,7 @@
       var chip = el('button', 'chip', filter[0] + ' ' + count);
       chip.type = 'button';
       chip.setAttribute('aria-pressed', String(index === filterIndex));
-      chip.addEventListener('click', function () { renderMyJobs(jobs, index); });
+      chip.addEventListener('click', function () { renderMyJobs(me, jobs, index); });
       bar.appendChild(chip);
     });
     main.appendChild(bar);
@@ -925,7 +925,11 @@
     if (!jobs.length) card.appendChild(el('p', 'muted', 'ยังไม่เคยแจ้งงาน กด "แจ้งงานใหม่" ที่เมนูในแชทเพื่อเริ่ม'));
     else if (!shown.length) card.appendChild(el('p', 'muted', 'ไม่มีงานในกลุ่มนี้'));
     shown.forEach(function (job) {
-      var item = el('div', 'job');
+      var item = el('button', 'job');
+      item.type = 'button';
+      item.addEventListener('click', function () {
+        showJob(me, job.jobId, function () { renderMyJobs(me, jobs, filterIndex); });
+      });
       var label = Core.JOB_STATUS_LABEL[job.status] || [job.status, 'off'];
       var head = el('div', 'job-head');
       head.appendChild(badge(label[0], label[1]));
@@ -939,6 +943,129 @@
     main.appendChild(card);
   }
 
+  // ---------- รายละเอียดงาน (ใบงาน 08 · docs/design/UI.md หัวข้อ "หน้ารายละเอียดงาน") ----------
+
+  // ชื่อการกระทำในประวัติ (Action ในชีต StatusLog ตาม SPEC)
+  var ACTION_LABEL = {
+    CREATE: 'แจ้งงาน',
+    EDIT: 'แก้ไขงาน',
+    ADD_NOTI: 'เปิด Noti',
+    CANCEL: 'ยกเลิกงาน',
+    CLOSE_NO_NOTI: 'แก้เสร็จหน้างาน',
+    REPAIRED: 'ซ่อมเสร็จ',
+    CLOSE: 'ปิดงาน',
+    SEND_BACK: 'ส่งกลับให้ช่าง',
+  };
+
+  // onBack คือกลับไปหน้าที่เปิดมา (ไม่มีถ้าเปิดจากลิงก์ตรง)
+  function showJob(me, jobId, onBack) {
+    loading('รายละเอียดงาน');
+    api('jobDetail', { jobId: jobId })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        renderJob(me, res.data, onBack);
+      })
+      .catch(function () { showError('โหลดรายละเอียดงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  function renderJob(me, data, onBack) {
+    var job = data.job;
+    var main = screen('รายละเอียดงาน');
+    if (onBack) {
+      var back = el('button', 'small back', '‹ งานของฉัน');
+      back.type = 'button';
+      back.addEventListener('click', onBack);
+      main.appendChild(back);
+    }
+
+    var card = el('section', 'card');
+    var label = Core.JOB_STATUS_LABEL[job.status] || [job.status, 'off'];
+    var head = el('div', 'job-head');
+    head.appendChild(badge(label[0], label[1]));
+    head.appendChild(el('small', 'muted', job.jobId));
+    card.appendChild(head);
+    card.appendChild(el('h1', '', job.title));
+    card.appendChild(row('พื้นที่', el('span', '', [job.areaName, job.locationDetail].filter(Boolean).join(' · '))));
+    card.appendChild(row('อาการ', el('span', '', job.symptom)));
+    card.appendChild(row('แจ้งโดย', el('span', '', [data.reporter.name, data.reporter.department].filter(Boolean).join(' · '))));
+    card.appendChild(row('แจ้งเมื่อ', el('span', '', shortTime(job.createdAt) + ' · แจ้งมา ' + Core.ageText(job.createdAt, data.now))));
+    if (job.notiNo) card.appendChild(row('เลข Noti', el('span', 'mono', job.notiNo)));
+    if (job.detail) card.appendChild(el('p', 'notice', job.detail));
+    main.appendChild(card);
+
+    // รูปก่อนซ่อม (และหลังซ่อมรอบล่าสุดถ้ามี) วางคู่กัน แตะรูปดูเต็มจอ
+    var photos = el('section', 'card');
+    var pair = el('div', data.photos.after.length ? 'photo-pair' : '');
+    pair.appendChild(photoGroup(job.jobId, 'รูปอาการ', data.photos.before));
+    if (data.photos.after.length) pair.appendChild(photoGroup(job.jobId, 'รูปหลังซ่อม', data.photos.after));
+    photos.appendChild(pair);
+    if (job.repairNote) photos.appendChild(row('บันทึกของช่าง', el('span', '', job.repairNote)));
+    main.appendChild(photos);
+
+    var history = el('section', 'card');
+    history.appendChild(el('h2', 'card-title', 'ประวัติ'));
+    data.history.forEach(function (h) {
+      var item = el('div', 'history');
+      var text = (ACTION_LABEL[h.action] || h.action);
+      var to = Core.JOB_STATUS_LABEL[h.toStatus];
+      if (to && h.action !== 'CREATE') text += ' → ' + to[0];
+      item.appendChild(el('strong', '', text));
+      item.appendChild(el('small', 'muted', shortTime(h.at) + (h.by ? ' · ' + h.by : '')));
+      if (h.note) item.appendChild(el('small', '', h.note));
+      history.appendChild(item);
+    });
+    if (!data.history.length) history.appendChild(el('p', 'muted', 'ยังไม่มีประวัติ'));
+    main.appendChild(history);
+
+    // ปุ่มโทรหาผู้แจ้ง: backend ส่งเบอร์มาเฉพาะหัวหน้ากะ ช่าง และแอดมิน
+    if (data.reporter.phone) {
+      var call = el('a', 'button-link', 'โทรหาผู้แจ้ง');
+      call.href = 'tel:' + data.reporter.phone;
+      main.appendChild(call);
+    }
+  }
+
+  // กลุ่มรูป 1 กลุ่ม ขอรูปทีละรูปผ่าน API (รูปใน Drive ไม่มีลิงก์สาธารณะ)
+  function photoGroup(jobId, title, ids) {
+    var box = el('div', 'photo-group');
+    box.appendChild(el('span', 'field-label', title));
+    var grid = el('div', 'thumbs');
+    ids.forEach(function (fileId, i) {
+      var cell = el('button', 'thumb loading');
+      cell.type = 'button';
+      cell.setAttribute('aria-label', title + ' รูปที่ ' + (i + 1));
+      grid.appendChild(cell);
+      api('jobPhoto', { jobId: jobId, fileId: fileId })
+        .then(function (res) {
+          cell.classList.remove('loading');
+          if (!res.ok) { cell.textContent = 'โหลดไม่ได้'; return; }
+          var img = el('img');
+          img.src = res.data.photo;
+          img.alt = '';
+          cell.appendChild(img);
+          cell.addEventListener('click', function () { showPhoto(res.data.photo); });
+        })
+        .catch(function () { cell.classList.remove('loading'); cell.textContent = 'โหลดไม่ได้'; });
+    });
+    if (!ids.length) grid.appendChild(el('p', 'muted', 'ไม่มีรูป'));
+    box.appendChild(grid);
+    return box;
+  }
+
+  // ดูรูปเต็มจอ แตะที่ไหนก็ปิด
+  function showPhoto(src) {
+    var overlay = el('div', 'photo-full');
+    var img = el('img');
+    img.src = src;
+    img.alt = '';
+    overlay.appendChild(img);
+    var close = el('button', 'small', 'ปิด');
+    close.type = 'button';
+    overlay.appendChild(close);
+    overlay.addEventListener('click', function () { overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
   // "2026-10-28 08:05:00" → "28/10 08:05"
   function shortTime(value) {
     var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(value || ''));
@@ -946,7 +1073,8 @@
   }
 
   function route(me) {
-    var page = new URLSearchParams(window.location.search).get('page') || '';
+    var params = new URLSearchParams(window.location.search);
+    var page = params.get('page') || '';
     if (me.status === 'NOT_REGISTERED' || me.status === 'REJECTED') {
       return api('listDepartments')
         .then(function (res) {
@@ -967,6 +1095,7 @@
       return showError('โรลของคุณแจ้งงานไม่ได้ ติดต่อแอดมินถ้าต้องการแจ้งงาน');
     }
     if (page === 'my') return showMyJobs(me);
+    if (page === 'job') return showJob(me, params.get('id'));
     // หน้าที่ปุ่มเมนูเปิดได้แล้วแต่ยังไม่ได้สร้าง (ทำในใบงาน 07 เป็นต้นไป)
     if (page) return showStatus(me, 'หน้านี้กำลังสร้าง จะเปิดใช้เร็ว ๆ นี้');
     return showStatus(me);

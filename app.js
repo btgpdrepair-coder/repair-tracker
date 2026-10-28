@@ -523,6 +523,7 @@
     var form = el('form', 'card');
     form.noValidate = true;
     var check = function () { return Core.validateJob(draft, options); };
+    var buildInfo = null;
 
     if (step === 1) {
       form.appendChild(el('h1', '', 'ถ่ายรูปอาการ'));
@@ -547,6 +548,9 @@
       body.appendChild(camera);
       body.appendChild(album);
       body.appendChild(el('p', 'notice', 'ถ้าทำได้ ถ่าย 1 รูปให้เห็นรอบ ๆ ด้วย ช่างจะหาเจอง่ายขึ้น'));
+      // เลขรุ่นแอปและสถานะกล้องในแอป ตัวเล็กสีจาง ใช้ถามผู้ใช้ตอนกล้องมีปัญหา (Android บางเครื่อง LINE ไม่ให้ใช้กล้องในแอป)
+      var inAppCamera = navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'รองรับ' : 'ไม่รองรับ';
+      buildInfo = el('p', 'build-info', 'รุ่น ' + (CONFIG.BUILD || 'dev') + ' · กล้องในแอป: ' + inAppCamera);
     }
 
     if (step === 2) {
@@ -624,6 +628,7 @@
     next.type = 'submit';
     nav.appendChild(next);
     form.appendChild(nav);
+    if (buildInfo) form.appendChild(buildInfo);
 
     form.addEventListener('submit', function (event) {
       event.preventDefault();

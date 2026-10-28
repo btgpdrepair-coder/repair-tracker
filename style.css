@@ -81,6 +81,7 @@ main { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .badge.err { background: var(--err-bg); color: var(--err-text); }
 
 .error { background: var(--err-bg); color: var(--err-text); border-radius: 8px; padding: 12px; margin: 0; }
+.warning { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 12px; margin: 0; font-size: 14px; }
 
 button {
   min-height: 44px;

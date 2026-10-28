@@ -87,7 +87,8 @@ var Core = (function () {
   }
 
   // ตรวจข้อมูลลงทะเบียน คืน { ok, fields } โดย fields บอกข้อความผิดของแต่ละช่อง
-  function validateRegistration(input) {
+  // departments คือรายชื่อแผนกที่เปิดใช้ (จากชีต Departments) ถ้าส่งมา แผนกต้องอยู่ในรายการนี้
+  function validateRegistration(input, departments) {
     input = input || {};
     var fields = {};
     var realName = String(input.realName == null ? '' : input.realName).trim();
@@ -99,6 +100,7 @@ var Core = (function () {
 
     if (!department) fields.department = 'กรุณาเลือกแผนก';
     else if (department.length > DEPARTMENT_MAX) fields.department = 'ชื่อแผนกยาวเกิน ' + DEPARTMENT_MAX + ' ตัวอักษร';
+    else if (departments && departments.indexOf(department) === -1) fields.department = 'กรุณาเลือกแผนกจากรายการ';
 
     if (!phone) fields.phone = 'กรุณากรอกเบอร์มือถือ';
     else if (!/^0\d{9}$/.test(phone)) fields.phone = 'เบอร์มือถือต้องเป็นตัวเลข 10 หลักขึ้นต้นด้วย 0';

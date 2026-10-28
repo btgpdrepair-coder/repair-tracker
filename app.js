@@ -28,12 +28,10 @@
   // คำอธิบายโรลในหน้าลงทะเบียน (ตาม mockup)
   var ROLE_HINT = {
     STAFF: 'แจ้งงานพร้อมรูป และดูงานของตัวเอง',
-    LEAD: 'เปิด Noti ใน SAP ยกเลิก และปิดงาน',
+    LEAD: 'เปิด Noti ใน SAP ยกเลิก และปิดงาน ของแผนกตัวเอง',
     PLANNER: 'ดูสรุปงานค้างทั้งหมด',
     TECH: 'ดูงานรอซ่อม และแนบรูปหลังซ่อม',
   };
-
-  var DEPARTMENTS = ['ผลิต', 'ซ่อมบำรุง', 'วิศวกรรม', 'คลังสินค้า'];
 
   // ข้อความแจ้งเรื่องข้อมูล ตามหัวข้อ "กติกาหน้าจอ" ในสเปก
   var CONSENT_TEXT = 'ระบบนี้เป็นโครงการนำร่องติดตามงานซ่อม เก็บชื่อจริง แผนก เบอร์มือถือ บัญชี LINE และรูปที่คุณถ่าย เพื่อใช้ติดตามงานซ่อมเท่านั้น ผู้ที่เห็นข้อมูลคือผู้ใช้ในระบบตามสิทธิ์ของแต่ละโรล ข้อมูลจะถูกลบหรือย้ายเข้าระบบบริษัทเมื่อจบโครงการ ถ้าต้องการให้ลบข้อมูล ติดต่อแอดมิน';
@@ -102,7 +100,8 @@
   }
 
   // หน้าลงทะเบียน (ตาม mockup Register.html)
-  function showRegister(me) {
+  // departments คือรายชื่อแผนกจากชีต Departments (คำสั่ง listDepartments)
+  function showRegister(me, departments) {
     var main = screen('ลงทะเบียนใช้งาน');
     var form = el('form', 'card');
     form.noValidate = true;
@@ -114,7 +113,7 @@
     }
 
     var realName = field(form, 'realName', 'ชื่อ-นามสกุลจริง', input('text', 'ใช้ชื่อเดียวกับในบัตรพนักงาน'));
-    var department = field(form, 'department', 'แผนก', select(DEPARTMENTS));
+    var department = field(form, 'department', 'แผนก', select(departments));
     var phone = field(form, 'phone', 'เบอร์มือถือ', input('tel', '0812345678'));
     phone.inputMode = 'numeric';
     phone.maxLength = 12;
@@ -168,7 +167,7 @@
         consent: consent.checked,
       };
       // ตรวจในเครื่องก่อนด้วยกติกาชุดเดียวกับ backend จะได้เห็นข้อผิดทันที
-      var check = Core.validateRegistration(payload);
+      var check = Core.validateRegistration(payload, departments);
       showFieldErrors(form, check.fields);
       if (!check.ok) return;
 
@@ -279,6 +278,11 @@
       tools.appendChild(qrButton);
       tools.appendChild(reload);
       main.appendChild(tools);
+
+      // เตือนแผนกที่มีพนักงานหน้างานแต่ไม่มีหัวหน้ากะ งานของแผนกนั้นจะไม่มีหัวหน้ากะคนไหนเห็นในคิว
+      (res.data.departmentsWithoutLead || []).forEach(function (dept) {
+        main.appendChild(el('p', 'warning', '⚠️ แผนก ' + dept + ' ยังไม่มีหัวหน้ากะ งานที่คนแผนกนี้แจ้งจะไม่มีหัวหน้ากะคนไหนเห็น ให้อนุมัติหรือเปลี่ยนโรลให้มีหัวหน้ากะของแผนกนี้อย่างน้อย 1 คน'));
+      });
       var users = res.data.users;
       var pending = users.filter(function (u) { return u.status === 'PENDING'; });
       var approved = users.filter(function (u) { return u.status === 'APPROVED'; });
@@ -370,7 +374,14 @@
   // เลือกหน้าจากสถานะผู้ใช้และพารามิเตอร์ ?page=
   function route(me) {
     var page = new URLSearchParams(window.location.search).get('page') || '';
-    if (me.status === 'NOT_REGISTERED' || me.status === 'REJECTED') return showRegister(me);
+    if (me.status === 'NOT_REGISTERED' || me.status === 'REJECTED') {
+      return api('listDepartments')
+        .then(function (res) {
+          if (!res.ok) return showError(res.error.message);
+          showRegister(me, res.data.departments);
+        })
+        .catch(function () { showError('โหลดรายชื่อแผนกไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+    }
     if (me.status === 'PENDING') return showStatus(me, 'แอดมินจะอนุมัติให้เร็วที่สุด เมื่ออนุมัติแล้วเมนูในแชทจะเปลี่ยนตามโรล');
     if (me.status === 'DISABLED') return showStatus(me, 'ติดต่อแอดมินถ้าคิดว่าเป็นความผิดพลาด');
     if (page === 'register') return showStatus(me, 'คุณลงทะเบียนและได้รับอนุมัติแล้ว');

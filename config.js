@@ -2,4 +2,5 @@
 window.APP_CONFIG = {
   LIFF_ID: '2012248667-eQI5MbDP',
   API_URL: 'https://script.google.com/macros/s/AKfycbwXYLF_wMPh0urzWuITKzet0XGJddTOwv45DYwWdT53UXc_QBJpNVY7cXckDNgOvS5LRQ/exec',
+  OA_BASIC_ID: '@802ztxku',
 };

@@ -238,6 +238,29 @@
     });
   }
 
+  // แสดง QR เพิ่มเพื่อน OA เต็มจอ ให้คนใหม่สแกนจากมือถือแอดมิน ปิดแล้วเรียก onClose
+  // รูป QR ดึงจากบริการ QR ทางการของ LINE ตาม Basic ID ของ OA
+  function showFriendQr(onClose) {
+    var basicId = String(CONFIG.OA_BASIC_ID || '').replace(/^@/, '');
+    var overlay = el('div', 'qr-overlay');
+    var box = el('div', 'qr-box');
+    box.appendChild(el('h1', '', 'สแกนเพื่อเพิ่มเพื่อน'));
+    box.appendChild(el('p', 'muted', 'ให้คนใหม่เปิดกล้อง LINE สแกน แล้วกดปุ่ม "ลงทะเบียน" ที่เมนูด้านล่างแชท'));
+    var img = document.createElement('img');
+    img.alt = 'QR เพิ่มเพื่อน LINE OA';
+    img.src = 'https://qr-official.line.me/sid/L/' + encodeURIComponent(basicId) + '.png';
+    box.appendChild(img);
+    box.appendChild(el('p', 'qr-id', '@' + basicId));
+    var close = el('button', 'primary', 'ปิด แล้วดูคำขอใหม่');
+    close.addEventListener('click', function () {
+      document.body.removeChild(overlay);
+      onClose();
+    });
+    box.appendChild(close);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+  }
+
   // หน้าจัดการผู้ใช้ของแอดมิน (ตาม mockup Users.html)
   function showUsers(me) {
     var main = screen('จัดการผู้ใช้');
@@ -246,6 +269,16 @@
     api('listUsers').then(function (res) {
       main.innerHTML = '';
       if (!res.ok) return showError(res.error.message);
+
+      // ปุ่มด้านบน: QR เพิ่มเพื่อนสำหรับลงทะเบียนหน้างาน และโหลดรายการใหม่
+      var tools = el('div', 'toolbar');
+      var qrButton = el('button', 'primary small', 'QR เพิ่มเพื่อน');
+      qrButton.addEventListener('click', function () { showFriendQr(function () { showUsers(me); }); });
+      var reload = el('button', 'small', 'โหลดใหม่');
+      reload.addEventListener('click', function () { showUsers(me); });
+      tools.appendChild(qrButton);
+      tools.appendChild(reload);
+      main.appendChild(tools);
       var users = res.data.users;
       var pending = users.filter(function (u) { return u.status === 'PENDING'; });
       var approved = users.filter(function (u) { return u.status === 'APPROVED'; });

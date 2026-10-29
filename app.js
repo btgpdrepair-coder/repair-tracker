@@ -1085,6 +1085,7 @@
       item.appendChild(el('strong', '', job.title));
       item.appendChild(el('small', 'muted', [job.areaName, job.locationDetail].filter(Boolean).join(' · ')));
       item.appendChild(el('small', 'muted', 'แจ้งเมื่อ ' + shortTime(job.createdAt)));
+      if (job.followUp) item.appendChild(followUpBadges(job.followUp));
       card.appendChild(item);
     });
     main.appendChild(card);
@@ -1102,6 +1103,7 @@
     REPAIRED: 'ซ่อมเสร็จ',
     CLOSE: 'ปิดงาน',
     SEND_BACK: 'ส่งกลับให้ช่าง',
+    FOLLOW_UP: 'บันทึกการตาม',
   };
 
   // nav คือหน้าที่เปิดมา { label, go(notice) } ใช้ทำปุ่มย้อนกลับ (ไม่มีถ้าเปิดจากลิงก์ตรง)
@@ -1141,6 +1143,148 @@
     return badge(label[0], label[1]);
   }
 
+  // ---------- บันทึกการตาม (ใบงาน 21) ----------
+
+  // วันนัดแบบสั้น 2026-11-08 → "8/11"
+  function dayMonth(date) {
+    var m = /^\d{4}-(\d{2})-(\d{2})$/.exec(String(date || ''));
+    return m ? Number(m[2]) + '/' + Number(m[1]) : '';
+  }
+
+  // ป้ายการตามในรายการ: มีคำตอบ = "เหตุผล · นัด 8/11" · รอคำตอบ = ป้ายแดง
+  function followUpBadges(followUp) {
+    var box = el('span', 'badges');
+    if (followUp.state === 'AWAITING') box.appendChild(badge('รอคำตอบ', 'err'));
+    else if (followUp.state === 'ANSWERED') box.appendChild(badge(followUp.reason + ' · นัด ' + dayMonth(followUp.nextDate), 'off'));
+    return box;
+  }
+
+  // กล่องบันทึกการตามในหน้ารายละเอียด (งานกำลังซ่อม): บันทึกล่าสุด หรือบอกว่ารอคำตอบ + ปุ่มบันทึก (ช่าง Planner แอดมิน)
+  function followUpCard(me, data, self) {
+    var f = data.followUp;
+    var canRecord = data.actions && data.actions.followUp;
+    if (!f || (!f.state && !f.last && !canRecord)) return null;
+    var card = el('section', 'card');
+    var head = el('div', 'job-head');
+    head.appendChild(el('h2', 'card-title', 'บันทึกการตาม'));
+    if (f.state) head.appendChild(followUpBadges({ state: f.state, reason: 'มีคำตอบ', nextDate: f.last && f.last.nextDate }));
+    card.appendChild(head);
+    if (f.last) {
+      card.appendChild(row('ช้าเพราะ', el('span', '', f.last.reason)));
+      card.appendChild(row('นัดตาม', el('span', '', dayMonth(f.last.nextDate) + (f.state === 'AWAITING' ? ' (ถึงวันนัดแล้ว)' : ''))));
+      if (f.last.note) card.appendChild(el('p', 'notice', f.last.note));
+      card.appendChild(el('small', 'muted', 'บันทึกโดย ' + (f.last.by || '-') + ' · ' + shortTime(f.last.at)));
+    } else if (f.state === 'AWAITING') {
+      card.appendChild(el('p', 'muted', 'งานค้างแล้ว ยังไม่มีใครบอกว่าช้าเพราะอะไร'));
+    } else {
+      card.appendChild(el('p', 'muted', 'ถ้างานนี้ต้องรอ บอกเหตุผลและวันนัดตาม ให้หัวหน้ากะและผู้แจ้งรู้'));
+    }
+    if (canRecord) {
+      card.appendChild(actionButton(f.state === 'AWAITING' ? 'primary' : '', f.last ? 'บันทึกการตามใหม่' : 'บันทึกการตาม',
+        function () { showFollowUp(me, data, self); }));
+    }
+    return card;
+  }
+
+  // ฟอร์มบันทึกการตาม: เหตุผล (ปุ่มเลือก "อื่น ๆ" ต้องพิมพ์) + หมายเหตุ + วันนัด (ปุ่มลัด หรือเลือกวัน ไม่เกิน 30 วัน)
+  function showFollowUp(me, data, nav) {
+    var job = data.job;
+    var opts = data.followUpForm;
+    var main = screen('บันทึกการตาม');
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'บันทึกการตาม'));
+    form.appendChild(el('p', 'notice', 'บอกหัวหน้ากะและผู้แจ้งว่าช้าเพราะอะไร และจะตามอีกครั้งวันไหน งานยังนับค้างตามเดิม'));
+
+    var box = el('fieldset', 'field');
+    box.dataset.field = 'reason';
+    box.appendChild(el('legend', '', 'ช้าเพราะ *'));
+    opts.reasons.forEach(function (r) {
+      var option = el('label', 'choice');
+      var radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'reason';
+      radio.value = r.code;
+      option.appendChild(radio);
+      option.appendChild(el('span', '', r.label));
+      box.appendChild(option);
+    });
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+
+    var noteValue = '';
+    var note = textArea(form, 'note', 'หมายเหตุ (ไม่บังคับ)', 'เช่น สั่งซีลแล้ว ของเข้าวันพฤหัส', '', function (text) { noteValue = text; });
+    var noteLabel = note.parentNode.querySelector('label');
+    box.addEventListener('change', function () {
+      var picked = form.querySelector('input[name="reason"]:checked');
+      noteLabel.textContent = picked && picked.value === Core.OTHER ? 'รออะไร *' : 'หมายเหตุ (ไม่บังคับ)';
+    });
+
+    var dateBody = group(form, 'nextDate', 'นัดตามอีกครั้ง *');
+    var date = input('date', '');
+    date.min = opts.minDate;
+    date.max = opts.maxDate;
+    var shortcuts = [['พรุ่งนี้', 0], ['อีก 3 วัน', 2], ['อีก 7 วัน', 6]].map(function (s) {
+      return { text: s[0], date: Core.addDays(opts.minDate, s[1]) };
+    });
+    var bar = el('div', 'chips');
+    function mark() {
+      Array.prototype.forEach.call(bar.childNodes, function (chip, i) {
+        chip.setAttribute('aria-pressed', String(shortcuts[i] && shortcuts[i].date === date.value));
+      });
+    }
+    shortcuts.forEach(function (s) {
+      var chip = el('button', 'chip', s.text);
+      chip.type = 'button';
+      chip.addEventListener('click', function () { date.value = s.date; mark(); });
+      bar.appendChild(chip);
+    });
+    dateBody.appendChild(bar);
+    dateBody.appendChild(el('small', 'muted', 'หรือเลือกวัน (ไกลสุด 30 วัน ถ้ารอนานกว่านั้น บันทึกใหม่เมื่อถึงวันนัด)'));
+    dateBody.appendChild(date);
+    date.addEventListener('change', mark);
+    date.addEventListener('input', mark);
+
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', 'บันทึกการตาม');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var picked = form.querySelector('input[name="reason"]:checked');
+      var payload = { jobId: job.jobId, reason: picked ? picked.value : '', note: noteValue.trim(), nextDate: date.value };
+      var fields = {};
+      if (!payload.reason) fields.reason = 'กรุณาเลือกเหตุผลที่ช้า';
+      if (payload.reason === Core.OTHER && !payload.note) fields.note = 'กรุณาบอกว่ารออะไร';
+      if (!payload.nextDate) fields.nextDate = 'กรุณาเลือกวันนัดตาม';
+      else if (payload.nextDate < opts.minDate || payload.nextDate > opts.maxDate) fields.nextDate = 'เลือกวันพรุ่งนี้ถึงอีก 30 วัน';
+      showFieldErrors(form, fields);
+      if (Object.keys(fields).length) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังบันทึก…';
+      error.classList.add('hidden');
+      api('addFollowUp', payload)
+        .then(function (res) {
+          if (res.ok) return nav.go('บันทึกการตามแล้ว · นัดตาม ' + dayMonth(payload.nextDate));
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'บันทึกการตาม';
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'บันทึกการตาม';
+        });
+    });
+    main.appendChild(form);
+  }
+
   function renderJob(me, data, nav, notice) {
     var job = data.job;
     var main = screen('รายละเอียดงาน');
@@ -1166,6 +1310,8 @@
     if (job.detail) card.appendChild(el('p', 'notice', job.detail));
     if (data.sentBack) card.appendChild(el('p', 'sent-back', 'ส่งกลับให้ช่าง: ' + data.sentBack.note));
     main.appendChild(card);
+    var follow = followUpCard(me, data, self);
+    if (follow) main.appendChild(follow);
 
     // รูปก่อนซ่อม (และหลังซ่อมรอบล่าสุดถ้ามี) วางคู่กัน แตะรูปดูเต็มจอ
     var photos = el('section', 'card');
@@ -1185,7 +1331,7 @@
       var text = (ACTION_LABEL[h.action] || h.action);
       var to = Core.JOB_STATUS_LABEL[h.toStatus];
       // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" แต่ไม่ใช่ "ซ่อมเสร็จ → ซ่อมเสร็จ")
-      var obvious = h.action === 'EDIT' || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
+      var obvious = h.action === 'EDIT' || h.action === 'FOLLOW_UP' || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
       if (to && !obvious && text.indexOf(to[0]) < 0) text += ' → ' + to[0];
       item.appendChild(el('strong', '', text));
       item.appendChild(el('small', 'muted', shortTime(h.at) + (h.by ? ' · ' + h.by : '')));
@@ -1776,6 +1922,7 @@
         ? 'ซ่อมเสร็จ ' + Core.ageText(job.repairedAt || job.since, data.now) + 'ก่อน' + (job.repairedBy ? ' · ช่าง ' + job.repairedBy : '')
         : [job.reporterName, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ');
       info.appendChild(el('small', 'muted', (me.role === 'LEAD' ? '' : job.department + ' · ') + meta));
+      if (job.followUp) info.appendChild(followUpBadges(job.followUp));
       item.appendChild(info);
       item.addEventListener('click', function () {
         if (view === 'noti') openNotiForm(me, job.jobId, nav);
@@ -1854,6 +2001,7 @@
       item.appendChild(top);
       var parts = me.role === 'LEAD' ? [] : [job.department];
       item.appendChild(el('small', 'muted', parts.concat([job.areaName, Core.ageText(job.createdAt, data.now)]).filter(Boolean).join(' · ')));
+      if (job.followUp) item.appendChild(followUpBadges(job.followUp));
       item.appendChild(el('small', 'muted', job.jobId));
       card.appendChild(item);
     });

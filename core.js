@@ -467,20 +467,92 @@ var Core = (function () {
       cancel: (manager && s === JOB_STATUS.PENDING_NOTI) || (admin && (s === JOB_STATUS.IN_REPAIR || s === JOB_STATUS.REPAIRED)),
       repair: (user.Role === 'TECH' || admin) && s === JOB_STATUS.IN_REPAIR,
       close: manager && s === JOB_STATUS.REPAIRED,
+      // บันทึกการตาม (ใบงาน 21): คนโดนตาม ช่าง Planner และแอดมิน เฉพาะงานกำลังซ่อม
+      followUp: ['TECH', 'PLANNER', 'ADMIN'].indexOf(user.Role) >= 0 && s === JOB_STATUS.IN_REPAIR,
       cancelReasons: reasons,
     };
+  }
+
+  // ---------- บันทึกการตาม (ใบงาน 21) ----------
+
+  // แถว StatusLog ของบันทึกการตาม สถานะเดิม = ใหม่ จึงไม่ทำให้นาฬิกางานค้างเริ่มนับใหม่ (statusSince)
+  var FOLLOW_UP = 'FOLLOW_UP';
+  // มีคำตอบ = มีบันทึกและยังไม่ถึงวันนัด · รอคำตอบ = งานค้างที่ยังไม่มีบันทึก หรือถึงวันนัดแล้ว (GLOSSARY)
+  var FOLLOW_UP_STATE = { ANSWERED: 'ANSWERED', AWAITING: 'AWAITING' };
+  var FOLLOW_UP_MAX_DAYS = 30;
+  var DELAY_OTHER_LABEL = 'อื่น ๆ';
+  var FOLLOW_UP_NOTE = /^([\s\S]*?) · นัดตาม (\d{4}-\d{2}-\d{2})(?: · ([\s\S]*))?$/;
+
+  // วันที่ YYYY-MM-DD บวก n วัน วันที่ผิดรูปแบบคืน ''
+  function addDays(date, n) {
+    var t = parseTime(String(date) + ' 00:00:00');
+    return t === null ? '' : new Date(t + n * 86400000).toISOString().slice(0, 10);
+  }
+
+  // วันที่มีจริง (2026-02-30 ไม่ผ่าน)
+  function isDate(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && addDays(value, 0) === value;
+  }
+
+  // ตรวจบันทึกการตาม คืน { ok, fields, value: { reason, reasonLabel, note, nextDate } }
+  // reasons = [{ code, label, active }] จากชีต DelayReasons · "อื่น ๆ" (OTHER) ใช้ได้เสมอแต่ต้องพิมพ์
+  // today = วันที่ไทย YYYY-MM-DD · วันนัดต้องหลังวันนี้และไม่เกิน 30 วัน (รอนานกว่านั้นให้บันทึกซ้ำเมื่อถึงวันนัด)
+  function validateFollowUp(input, reasons, today) {
+    input = input || {};
+    var code = text(input.reason);
+    var note = text(input.note);
+    var nextDate = text(input.nextDate);
+    var reason = code === OTHER ? { label: DELAY_OTHER_LABEL }
+      : (reasons || []).filter(function (r) { return r.active && r.code === code; })[0];
+    var fields = {};
+    if (!reason) fields.reason = 'กรุณาเลือกเหตุผลที่ช้า';
+    if (code === OTHER && !note) fields.note = 'กรุณาบอกว่ารออะไร';
+    else if (note.length > NOTE_MAX) fields.note = 'ยาวเกิน ' + NOTE_MAX + ' ตัวอักษร';
+    if (!isDate(nextDate)) fields.nextDate = 'กรุณาเลือกวันนัดตาม';
+    else if (nextDate <= today) fields.nextDate = 'วันนัดต้องเป็นพรุ่งนี้หรือหลังจากนั้น';
+    else if (nextDate > addDays(today, FOLLOW_UP_MAX_DAYS)) {
+      fields.nextDate = 'นัดได้ไกลสุด ' + FOLLOW_UP_MAX_DAYS + ' วัน ถ้ารอนานกว่านั้นให้บันทึกใหม่เมื่อถึงวันนัด';
+    }
+    return {
+      ok: Object.keys(fields).length === 0,
+      fields: fields,
+      value: { reason: code, reasonLabel: reason ? reason.label : '', note: note, nextDate: nextDate },
+    };
+  }
+
+  // ข้อความในช่อง Note ของ StatusLog เช่น "รออะไหล่ · นัดตาม 2026-11-08 · สั่งซีลแล้ว" (คนอ่านในชีตเข้าใจ และแยกกลับได้)
+  function followUpNote(value) {
+    return value.reasonLabel + ' · นัดตาม ' + value.nextDate + (value.note ? ' · ' + value.note : '');
+  }
+
+  // บันทึกการตามล่าสุดของรอบกำลังซ่อมปัจจุบัน (หลังถูกส่งกลับเริ่มรอบใหม่) และสภาพการตาม
+  // คืน { state: ANSWERED | AWAITING | '', last: { reason, nextDate, note, at, byUserId } | null } · สถานะอื่นไม่มีสภาพการตาม
+  function followUpInfo(job, logs, now, config) {
+    if (job.Status !== JOB_STATUS.IN_REPAIR) return { state: '', last: null };
+    var since = statusSince(job, logs);
+    var last = null;
+    (logs || []).forEach(function (l) {
+      if (l.JobID && l.JobID !== job.JobID) return;
+      if (l.Action !== FOLLOW_UP || String(l.At) < since) return;
+      if (last && String(l.At) < last.at) return;
+      var m = FOLLOW_UP_NOTE.exec(String(l.Note || ''));
+      if (m) last = { reason: m[1], nextDate: m[2], note: m[3] || '', at: String(l.At), byUserId: l.ByUserID || '' };
+    });
+    if (last && last.nextDate > String(now).slice(0, 10)) return { state: FOLLOW_UP_STATE.ANSWERED, last: last };
+    var late = overdueInfo(job, logs, now, config).overdue;
+    return { state: late ? FOLLOW_UP_STATE.AWAITING : '', last: last };
   }
 
   // ---------- สรุปงานค้าง (ใบงาน 16, 17) ----------
 
   // นับงานค้างจากงานชุดหนึ่ง (กรองแผนกมาก่อนถ้าต้องการ) logs คือ StatusLog ทั้งหมด
   // คืน { open, overdue, byStatus: { สถานะ: { count, overdue } }, byDepartment: { แผนก: จำนวน },
-  //       oldest: [งานที่แจ้งมานานสุด 3 งาน], noNotiThisMonth: { แผนก: จำนวน } }
+  //       oldest: [งานที่แจ้งมานานสุด 3 งาน], noNotiThisMonth: { แผนก: จำนวน }, awaiting: กำลังซ่อมรอคำตอบ (ใบงาน 21) }
   function summarize(jobs, logs, now, config) {
     var byJob = {};
     (logs || []).forEach(function (l) { (byJob[l.JobID] = byJob[l.JobID] || []).push(l); });
     var month = String(now).slice(0, 7);
-    var result = { open: 0, overdue: 0, byStatus: {}, byDepartment: {}, oldest: [], noNotiThisMonth: {} };
+    var result = { open: 0, overdue: 0, byStatus: {}, byDepartment: {}, oldest: [], noNotiThisMonth: {}, awaiting: 0 };
     OPEN_STATUSES.forEach(function (s) { result.byStatus[s] = { count: 0, overdue: 0 }; });
     var open = [];
     (jobs || []).forEach(function (j) {
@@ -493,6 +565,7 @@ var Core = (function () {
       result.open++;
       result.byStatus[j.Status].count++;
       if (late) { result.overdue++; result.byStatus[j.Status].overdue++; }
+      if (late && followUpInfo(j, byJob[j.JobID], now, config).state === FOLLOW_UP_STATE.AWAITING) result.awaiting++;
       result.byDepartment[dept] = (result.byDepartment[dept] || 0) + 1;
       open.push(j);
     });
@@ -559,6 +632,14 @@ var Core = (function () {
     photoRounds: photoRounds,
     CANCEL_REASON: CANCEL_REASON,
     jobPermissions: jobPermissions,
+    FOLLOW_UP: FOLLOW_UP,
+    FOLLOW_UP_STATE: FOLLOW_UP_STATE,
+    FOLLOW_UP_MAX_DAYS: FOLLOW_UP_MAX_DAYS,
+    DELAY_OTHER_LABEL: DELAY_OTHER_LABEL,
+    addDays: addDays,
+    validateFollowUp: validateFollowUp,
+    followUpNote: followUpNote,
+    followUpInfo: followUpInfo,
     summarize: summarize,
   };
 })();

@@ -69,11 +69,47 @@
 
   // เรียกคำสั่ง API 1 คำสั่ง ส่ง ID token ไปทุกครั้ง (backend ไม่เชื่อ userId จากหน้าจอ)
   function api(action, payload) {
+    var key = requestKey(action, payload);
+    if (prefetched[key]) {
+      var ready = prefetched[key];
+      delete prefetched[key];
+      return ready;
+    }
+    return callApi(action, payload);
+  }
+
+  function callApi(action, payload) {
     return fetch(CONFIG.API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: action, idToken: liff.getIDToken(), payload: payload || {} }),
     }).then(function (res) { return res.json(); });
+  }
+
+  function requestKey(action, payload) {
+    return action + ' ' + JSON.stringify(payload || {});
+  }
+
+  // โหลดข้อมูลของหน้าที่จะเปิดไปพร้อมกับคำขอ me ไม่ต้องรอทีละรอบ (Apps Script ตอบราว 1.5–2 วินาทีต่อคำขอ)
+  // หน้าจอเรียก api() คำสั่งเดียวกันทีหลังก็ได้ผลชุดนี้ทันที · ผู้ใช้ไม่มีสิทธิ์ backend ตอบ error เองและผลนี้ไม่ถูกใช้
+  var prefetched = {};
+  var PAGE_DATA = {
+    my: ['listMyJobs'],
+    new: ['reportOptions'],
+    users: ['listUsers'],
+    all: ['listJobs', { view: 'all' }],
+    'queue-noti': ['listJobs', { view: 'noti' }],
+    'queue-close': ['listJobs', { view: 'close' }],
+    'queue-repair': ['listJobs', { view: 'repair' }],
+  };
+  function prefetchPage() {
+    var params = new URLSearchParams(window.location.search);
+    var page = params.get('page') || '';
+    var request = page === 'job' ? ['jobDetail', { jobId: params.get('id') }] : PAGE_DATA[page];
+    if (!request) return;
+    var pending = callApi(request[0], request[1]);
+    pending.catch(function () { /* หน้าที่ใช้ผลนี้จัดการ error เอง */ });
+    prefetched[requestKey(request[0], request[1])] = pending;
   }
 
   // ---------- หน้าต่าง ๆ ----------
@@ -1975,6 +2011,7 @@
           liff.login({ redirectUri: window.location.href });
           return null;
         }
+        prefetchPage();
         return api('me');
       })
       .then(function (res) {

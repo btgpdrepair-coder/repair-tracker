@@ -97,8 +97,6 @@
     if (me.realName) card.appendChild(row('ชื่อจริง', el('span', '', me.realName)));
     if (note) card.appendChild(el('p', 'muted', note));
     main.appendChild(card);
-    // ลายเซ็นผู้ทำ ตัวเล็กสีจางล่างสุดของหน้าแรก (docs/design/UI.md)
-    main.appendChild(el('p', 'signature', 'v1.0 · ออกแบบและพัฒนาโดย JABB'));
   }
 
   // หน้าลงทะเบียน (ตาม mockup Register.html)
@@ -306,7 +304,9 @@
         var item = el('div', 'person');
         var info = el('div', 'person-info');
         info.appendChild(el('strong', '', u.realName || u.lineName));
-        info.appendChild(el('small', 'muted', u.department + ' · ขอเป็น' + (ROLE_LABEL[u.requestedRole] || u.requestedRole)));
+        info.appendChild(el('small', 'muted', 'ขอเป็น' + (ROLE_LABEL[u.requestedRole] || u.requestedRole)));
+        // แอดมินแก้แผนกที่กรอกผิดได้ก่อนกดอนุมัติ
+        info.appendChild(departmentSelect(u));
         item.appendChild(info);
         var actions = el('div', 'person-actions');
         var reject = el('button', 'small', 'ปฏิเสธ');
@@ -322,18 +322,20 @@
       });
       main.appendChild(pendingCard);
 
-      // ผู้ใช้ที่อนุมัติแล้ว เปลี่ยนโรลได้ (ยกเว้นตัวเอง)
+      // ผู้ใช้ที่อนุมัติแล้ว เปลี่ยนโรล แผนก และระงับได้ (ตัวเองเปลี่ยนได้แค่แผนก)
       var allCard = el('section', 'card');
       allCard.appendChild(el('h1', '', 'ผู้ใช้ทั้งหมด ' + approved.length + ' คน'));
       approved.forEach(function (u) {
-        var item = el('div', 'person');
+        var item = el('div', 'person person-manage');
         var info = el('div', 'person-info');
         var isSelf = u.userId === me.userId;
         info.appendChild(el('strong', '', (u.realName || u.lineName) + (isSelf ? ' (คุณ)' : '')));
-        info.appendChild(el('small', 'muted', u.department));
         item.appendChild(info);
+        var controls = el('div', 'person-controls');
+        controls.appendChild(departmentSelect(u));
+        item.appendChild(controls);
         if (isSelf) {
-          item.appendChild(el('span', 'badge ok', ROLE_LABEL[u.role] || u.role));
+          controls.appendChild(el('span', 'badge ok', ROLE_LABEL[u.role] || u.role));
         } else {
           var roleSelect = document.createElement('select');
           roleSelect.className = 'role-select';
@@ -346,12 +348,58 @@
           roleSelect.addEventListener('change', function () {
             act(roleSelect, 'changeRole', { userId: u.userId, role: roleSelect.value });
           });
-          item.appendChild(roleSelect);
+          controls.appendChild(roleSelect);
+          var suspend = el('button', 'small', 'ระงับ');
+          suspend.addEventListener('click', function () {
+            var name = u.realName || u.lineName;
+            if (window.confirm('ระงับ ' + name + '? คนนี้จะใช้ระบบไม่ได้ ประวัติงานเก่ายังอยู่ และเปิดใช้อีกครั้งได้')) {
+              act(suspend, 'suspendUser', { userId: u.userId });
+            }
+          });
+          controls.appendChild(suspend);
         }
         allCard.appendChild(item);
       });
-      allCard.appendChild(el('p', 'muted', 'เปลี่ยนโรลแล้ว เมนูในแชทของคนนั้นเปลี่ยนตามทันที'));
+      allCard.appendChild(el('p', 'muted', 'เปลี่ยนโรลแล้ว เมนูในแชทของคนนั้นเปลี่ยนตามทันที · เปลี่ยนแผนกแล้ว งานที่แจ้งไปแล้วอยู่แผนกเดิม'));
       main.appendChild(allCard);
+
+      // ผู้ใช้ที่ระงับ (เช่น ลาออก) ซ่อนไว้ กดเปิดดูได้ และเปิดใช้อีกครั้งได้
+      var disabled = users.filter(function (u) { return u.status === 'DISABLED'; });
+      if (disabled.length) {
+        var box = el('details', 'card');
+        box.appendChild(el('summary', 'card-title', 'ผู้ใช้ที่ระงับ ' + disabled.length + ' คน'));
+        disabled.forEach(function (u) {
+          var item = el('div', 'person');
+          var info = el('div', 'person-info');
+          info.appendChild(el('strong', '', u.realName || u.lineName));
+          info.appendChild(el('small', 'muted', [u.department, ROLE_LABEL[u.role] || u.role].filter(Boolean).join(' · ')));
+          item.appendChild(info);
+          var back = el('button', 'small', 'เปิดใช้อีกครั้ง');
+          back.addEventListener('click', function () { act(back, 'reactivateUser', { userId: u.userId }); });
+          item.appendChild(back);
+          box.appendChild(item);
+        });
+        main.appendChild(box);
+      }
+
+      // ช่องเลือกแผนกของผู้ใช้ 1 คน เปลี่ยนแล้วบันทึกทันที (แผนกที่ปิดใช้ไปแล้วยังแสดงเป็นค่าปัจจุบัน)
+      function departmentSelect(u) {
+        var node = document.createElement('select');
+        node.className = 'role-select';
+        node.setAttribute('aria-label', 'แผนกของ ' + (u.realName || u.lineName));
+        var names = res.data.departments || [];
+        if (u.department && names.indexOf(u.department) === -1) names = [u.department].concat(names);
+        names.forEach(function (name) {
+          var option = el('option', '', 'แผนก' + name);
+          option.value = name;
+          option.selected = name === u.department;
+          node.appendChild(option);
+        });
+        node.addEventListener('change', function () {
+          act(node, 'changeDepartment', { userId: u.userId, department: node.value });
+        });
+        return node;
+      }
     }).catch(function () {
       showError('โหลดรายชื่อไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
     });
@@ -733,7 +781,7 @@
       body.appendChild(el('p', 'notice', 'ถ้าทำได้ ถ่าย 1 รูปให้เห็นรอบ ๆ ด้วย ช่างจะหาเจอง่ายขึ้น'));
       // เลขรุ่นแอปและสถานะกล้องในแอป ตัวเล็กสีจาง ใช้ถามผู้ใช้ตอนกล้องมีปัญหา (Android บางเครื่อง LINE ไม่ให้ใช้กล้องในแอป)
       var inAppCamera = navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'รองรับ' : 'ไม่รองรับ';
-      buildInfo = el('p', 'build-info', 'รุ่น ' + (CONFIG.BUILD || 'dev') + ' · กล้องในแอป: ' + inAppCamera);
+      buildInfo = el('p', 'build-info', 'กล้องในแอป: ' + inAppCamera);
     }
 
     if (step === 2) {
@@ -1907,8 +1955,16 @@
     return showStatus(me);
   }
 
+  // ลายเซ็นผู้ทำและเลขรุ่น ตัวเล็กสีจางล่างสุดทุกหน้า (docs/design/UI.md)
+  // เลขรุ่นใช้ถามผู้ใช้ว่ามือถือเปิดแอปรุ่นล่าสุดหรือยัง (ความผิดพลาดข้อ 7)
+  function showSignature() {
+    var footer = document.getElementById('signature');
+    if (footer) footer.textContent = 'v1.0 · รุ่น ' + (CONFIG.BUILD || 'dev') + ' · ออกแบบและพัฒนาโดย JABB';
+  }
+
   // เริ่มต้น: เปิด LIFF → ล็อกอินถ้าเปิดนอก LINE → เรียก me → เลือกหน้า
   function start() {
+    showSignature();
     if (!CONFIG.LIFF_ID || !CONFIG.API_URL) {
       showError('ยังตั้งค่าแอปไม่ครบ (LIFF_ID หรือ API_URL ใน config.js)');
       return;

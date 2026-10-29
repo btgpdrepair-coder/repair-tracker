@@ -86,6 +86,13 @@ var Core = (function () {
     return String(value == null ? '' : value).replace(/[\s-]/g, '');
   }
 
+  // เบอร์สำหรับโทรและแสดงผล: เบอร์ที่พิมพ์ลงชีตเองเป็นตัวเลข ชีตตัดเลข 0 ข้างหน้าทิ้ง (0879649498 → 879649498)
+  // เบอร์มือถือไทยมี 10 หลักขึ้นต้นด้วย 0 จึงเติม 0 คืนให้เมื่อเหลือ 9 หลัก
+  function phoneForCall(value) {
+    var digits = normalizePhone(value).replace(/\D/g, '');
+    return /^[1-9]\d{8}$/.test(digits) ? '0' + digits : digits;
+  }
+
   // ตรวจข้อมูลลงทะเบียน คืน { ok, fields } โดย fields บอกข้อความผิดของแต่ละช่อง
   // departments คือรายชื่อแผนกที่เปิดใช้ (จากชีต Departments) ถ้าส่งมา แผนกต้องอยู่ในรายการนี้
   function validateRegistration(input, departments) {
@@ -512,6 +519,7 @@ var Core = (function () {
     isRole: isRole,
     formatTime: formatTime,
     normalizePhone: normalizePhone,
+    phoneForCall: phoneForCall,
     validateRegistration: validateRegistration,
     JOB_STATUS: JOB_STATUS,
     JOB_STATUS_LABEL: JOB_STATUS_LABEL,

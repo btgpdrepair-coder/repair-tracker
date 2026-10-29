@@ -29,6 +29,9 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--bg);
   color: var(--text);
   font-family: 'IBM Plex Sans Thai', 'Noto Sans Thai', sans-serif;
@@ -60,7 +63,7 @@ body {
 .title span { font-size: 17px; font-weight: 700; }
 .title small { font-size: 13px; color: var(--muted); }
 
-main { padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: calc(100vh - 60px); }
+main { padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1 0 auto; }
 
 .card {
   background: var(--surface);
@@ -170,6 +173,10 @@ fieldset.field .choice { margin-bottom: 8px; }
 .person-info strong { font-size: 16px; }
 .person-info small { font-size: 14px; }
 .person-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.person-info select { align-self: flex-start; margin-top: 6px; }
+.person-manage { flex-direction: column; align-items: stretch; gap: 8px; }
+.person-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+details.card summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
 .role-select {
   min-height: 44px;
   border: 1px solid transparent;
@@ -250,7 +257,7 @@ button.link { min-height: 44px; border: 0; background: none; color: var(--primar
 .filters .chip { flex-shrink: 0; }
 
 /* ลายเซ็นล่างสุดของหน้า ตัวเล็กสีจาง */
-.signature { margin: auto 0 0; padding-top: 32px; text-align: center; font-size: 12px; color: var(--faint); }
+.signature { margin: 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); text-align: center; font-size: 12px; color: var(--faint); }
 
 /* กล้องในหน้าแอป (ขั้นถ่ายรูป) เต็มจอพื้นดำ */
 .cam { position: fixed; inset: 0; z-index: 20; background: #000000; display: flex; flex-direction: column; color: #FFFFFF; }
@@ -321,3 +328,4 @@ a.button-link.small { min-height: 44px; font-size: 15px; flex: 1; }
   min-height: 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface);
   color: var(--text); font: inherit; font-size: 15px; padding: 0 10px; min-width: 0;
 }
+.card-head button { flex-shrink: 0; white-space: nowrap; }

@@ -1933,11 +1933,13 @@
     main.appendChild(card);
   }
 
-  // ตัวกรองสถานะของหน้างานทั้งหมด (เริ่มต้น "ยังไม่จบ")
+  // ตัวกรองสถานะของหน้างานทั้งหมด (เริ่มต้น "ยังไม่จบ") ช่องที่ 3 คือเงื่อนไขเพิ่ม (ไม่มี = กรองแค่สถานะ)
   var ALL_FILTERS = [
     ['ยังไม่จบ', Core.OPEN_STATUSES],
     ['รอเปิด Noti', ['PENDING_NOTI']],
     ['กำลังซ่อม', ['IN_REPAIR']],
+    // ใบงาน 21: งานที่หัวหน้ากะต้องไปตาม
+    ['รอคำตอบ', ['IN_REPAIR'], function (j) { return Boolean(j.followUp && j.followUp.state === 'AWAITING'); }],
     ['ซ่อมเสร็จ', ['REPAIRED']],
     ['ปิดงาน', ['CLOSED']],
     ['ยกเลิก', ['CANCELLED']],
@@ -1979,8 +1981,9 @@
     main.appendChild(bar);
 
     var statuses = ALL_FILTERS[filters.status][1];
+    var extra = ALL_FILTERS[filters.status][2];
     var shown = data.jobs.filter(function (j) {
-      return (!statuses || statuses.indexOf(j.status) >= 0) &&
+      return (!statuses || statuses.indexOf(j.status) >= 0) && (!extra || extra(j)) &&
         (!filters.department || j.department === filters.department) &&
         (!filters.area || j.areaCode === filters.area);
     });

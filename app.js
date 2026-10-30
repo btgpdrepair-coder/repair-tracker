@@ -184,6 +184,17 @@
     consentLabel.appendChild(el('span', '', 'รับทราบ'));
     consentBox.appendChild(consentLabel);
     consentBox.appendChild(el('small', 'field-error'));
+
+    // ใบงาน 28: คนที่เปิด Notification ใน SAP เองได้ ติ๊กไว้ จะใส่เลข Noti ให้งานที่ตัวเองแจ้งได้หลังอนุมัติ
+    var sapLabel = el('label', 'choice');
+    var canNoti = document.createElement('input');
+    canNoti.type = 'checkbox';
+    sapLabel.appendChild(canNoti);
+    var sapText = el('span', 'choice-text');
+    sapText.appendChild(el('strong', '', 'ฉันเปิด Notification ใน SAP เองได้'));
+    sapText.appendChild(el('small', '', 'ไม่บังคับ · ติ๊กแล้วใส่เลข Noti ให้งานที่ตัวเองแจ้งได้ ไม่ต้องรอหัวหน้ากะ'));
+    sapLabel.appendChild(sapText);
+    form.appendChild(sapLabel);
     form.appendChild(consentBox);
 
     var submit = el('button', 'primary', 'ส่งคำขอ');
@@ -201,6 +212,7 @@
         phone: phone.value,
         requestedRole: checked ? checked.value : '',
         consent: consent.checked,
+        canNoti: canNoti.checked,
       };
       // ตรวจในเครื่องก่อนด้วยกติกาชุดเดียวกับ backend จะได้เห็นข้อผิดทันที
       var check = Core.validateRegistration(payload, departments);
@@ -341,6 +353,7 @@
         var info = el('div', 'person-info');
         info.appendChild(el('strong', '', u.realName || u.lineName));
         info.appendChild(el('small', 'muted', 'ขอเป็น' + (ROLE_LABEL[u.requestedRole] || u.requestedRole)));
+        if (u.canNoti) info.appendChild(badge('เปิด Noti ใน SAP ได้', 'info'));
         // แอดมินแก้แผนกที่กรอกผิดได้ก่อนกดอนุมัติ
         info.appendChild(departmentSelect(u));
         item.appendChild(info);
@@ -1738,7 +1751,23 @@
     form.noValidate = true;
     form.appendChild(el('h1', '', opts.title));
     photoField(form, state, { label: opts.photoLabel, rerender: function () { showRepairForm(me, data, nav, opts, state); } });
-    textArea(form, 'note', opts.noteLabel, opts.notePlaceholder, state.note, function (text) { state.note = text; });
+    var note = textArea(form, 'note', opts.noteLabel, opts.notePlaceholder, state.note, function (text) { state.note = text; });
+    // ปุ่มลัด (ใบงาน 30): แตะแล้วคำเข้าช่องบันทึก พิมพ์ต่อได้ · ปุ่มที่ต้องพิมพ์ต่อ (เช่น เปลี่ยนอะไหล่) ส่งเปล่า ๆ ไม่ได้
+    if (data.repairPicks && data.repairPicks.length) {
+      var picks = el('div', 'chips picks');
+      data.repairPicks.forEach(function (p) {
+        var chip = el('button', 'chip', p.label);
+        chip.type = 'button';
+        chip.addEventListener('click', function () {
+          var current = note.value.trim();
+          note.value = (current ? current + ' · ' : '') + p.label + ' ';
+          state.note = note.value;
+          note.focus();
+        });
+        picks.appendChild(chip);
+      });
+      note.parentNode.insertBefore(picks, note);
+    }
     if (opts.notice) form.appendChild(el('p', 'notice', opts.notice));
     var error = el('p', 'error hidden');
     form.appendChild(error);
@@ -1747,7 +1776,7 @@
     form.appendChild(submit);
     form.addEventListener('submit', function (event) {
       event.preventDefault();
-      var check = Core.validateAfterRepair(state, opts.noteMissing);
+      var check = Core.validateAfterRepair(state, opts.noteMissing, data.repairPicks);
       showFieldErrors(form, check.fields);
       if (!check.ok) return;
       submit.disabled = true;

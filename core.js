@@ -119,8 +119,14 @@ var Core = (function () {
     return {
       ok: Object.keys(fields).length === 0,
       fields: fields,
-      value: { realName: realName, department: department, phone: phone, requestedRole: input.requestedRole },
+      value: { realName: realName, department: department, phone: phone, requestedRole: input.requestedRole, canNoti: input.canNoti === true },
     };
+  }
+
+  // ใบงาน 28: ผู้ใช้คนนี้เปิด Notification ใน SAP เองได้ไหม (ชีต Users คอลัมน์ CanNoti: ได้ / TRUE)
+  function canOpenNoti(user) {
+    var v = (user || {}).CanNoti;
+    return configFlagValue(v) || String(v == null ? '' : v).trim() === 'ได้';
   }
 
   // ---------- งาน ----------
@@ -419,8 +425,12 @@ var Core = (function () {
 
   var NOTE_MAX = 300;
 
+  // ปุ่ม "อื่น ๆ" ของบันทึกการซ่อม (ใบงาน 30) มีเสมอและต้องพิมพ์ต่อ
+  var REPAIR_PICK_OTHER = { code: OTHER, label: 'อื่น ๆ', needDetail: true };
+
   // ตรวจรูปหลังซ่อม/หลังแก้ 1–3 รูป และบันทึก (บังคับ) คืน { ok, fields: { photos, note }, value }
-  function validateAfterRepair(input, noteMessage) {
+  // picks = ปุ่มลัด [{ label, needDetail }] (ใบงาน 30): บันทึกที่จบด้วยคำของปุ่มที่ต้องพิมพ์ต่อ ถือว่ายังไม่ได้พิมพ์ต่อ
+  function validateAfterRepair(input, noteMessage, picks) {
     input = input || {};
     var photos = Array.isArray(input.photos) ? input.photos : [];
     var note = text(input.note);
@@ -430,6 +440,13 @@ var Core = (function () {
     else if (!photos.every(isPhoto)) fields.photos = 'รูปไม่ถูกต้อง ลองถ่ายใหม่อีกครั้ง';
     if (!note) fields.note = noteMessage || 'กรุณาบอกว่าซ่อมอะไรไป';
     else if (note.length > NOTE_MAX) fields.note = 'ยาวเกิน ' + NOTE_MAX + ' ตัวอักษร';
+    else {
+      var bare = (picks || []).filter(function (p) {
+        if (!p.needDetail) return false;
+        return note === p.label || note.slice(-p.label.length - 1) === ' ' + p.label;
+      })[0];
+      if (bare) fields.note = 'พิมพ์ต่อจาก "' + bare.label + '" ว่า' + (bare.code === OTHER ? 'ทำอะไรไป' : 'อะไรบ้าง');
+    }
     return { ok: Object.keys(fields).length === 0, fields: fields, value: { photos: photos, note: note } };
   }
 
@@ -461,8 +478,10 @@ var Core = (function () {
       if (!noNoti) reasons.push('FIXED_NO_NOTI');
       if (admin) reasons.push('OTHER');
     }
+    // ใบงาน 28: ผู้แจ้งที่เปิด Notification ใน SAP เองได้ ใส่เลข Noti ให้งานที่ตัวเองแจ้ง
+    var ownNoti = s === JOB_STATUS.PENDING_NOTI && job.ReporterID === user.UserID && canOpenNoti(user);
     return {
-      addNoti: manager && s === JOB_STATUS.PENDING_NOTI,
+      addNoti: (manager && s === JOB_STATUS.PENDING_NOTI) || ownNoti,
       fixOnSite: manager && noNoti && s === JOB_STATUS.PENDING_NOTI,
       cancel: (manager && s === JOB_STATUS.PENDING_NOTI) || (admin && (s === JOB_STATUS.IN_REPAIR || s === JOB_STATUS.REPAIRED)),
       repair: (user.Role === 'TECH' || admin) && s === JOB_STATUS.IN_REPAIR,
@@ -629,9 +648,11 @@ var Core = (function () {
     formatNoti: formatNoti,
     NOTE_MAX: NOTE_MAX,
     validateAfterRepair: validateAfterRepair,
+    REPAIR_PICK_OTHER: REPAIR_PICK_OTHER,
     photoRounds: photoRounds,
     CANCEL_REASON: CANCEL_REASON,
     jobPermissions: jobPermissions,
+    canOpenNoti: canOpenNoti,
     FOLLOW_UP: FOLLOW_UP,
     FOLLOW_UP_STATE: FOLLOW_UP_STATE,
     FOLLOW_UP_MAX_DAYS: FOLLOW_UP_MAX_DAYS,

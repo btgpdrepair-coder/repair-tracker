@@ -200,6 +200,12 @@
     sapText.appendChild(el('strong', '', 'ฉันเปิด Notification ใน SAP เองได้'));
     sapText.appendChild(el('small', '', 'ไม่บังคับ · ติ๊กแล้วใส่เลข Noti ให้งานที่ตัวเองแจ้งได้ ไม่ต้องรอหัวหน้ากะ'));
     sapLabel.appendChild(sapText);
+    // มีผลเฉพาะพนักงานหน้างาน จึงขึ้นเฉพาะตอนเลือกโรลนี้ (หัวหน้ากะใส่เลข Noti ได้อยู่แล้ว โรลอื่นแจ้งงานไม่ได้)
+    sapLabel.style.display = 'none';
+    roleBox.addEventListener('change', function () {
+      var picked = form.querySelector('input[name="requestedRole"]:checked');
+      sapLabel.style.display = picked && picked.value === 'STAFF' ? '' : 'none';
+    });
     form.appendChild(sapLabel);
     form.appendChild(consentBox);
 
@@ -218,7 +224,7 @@
         phone: phone.value,
         requestedRole: checked ? checked.value : '',
         consent: consent.checked,
-        canNoti: canNoti.checked,
+        canNoti: Boolean(checked && checked.value === 'STAFF' && canNoti.checked),
       };
       // ตรวจในเครื่องก่อนด้วยกติกาชุดเดียวกับ backend จะได้เห็นข้อผิดทันที
       var check = Core.validateRegistration(payload, departments);

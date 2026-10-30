@@ -480,12 +480,18 @@ var Core = (function () {
     }
     // ใบงาน 28: ผู้แจ้งที่เปิด Notification ใน SAP เองได้ ใส่เลข Noti ให้งานที่ตัวเองแจ้ง
     var ownNoti = s === JOB_STATUS.PENDING_NOTI && job.ReporterID === user.UserID && canOpenNoti(user);
+    // ใบงาน 25 และ 29: ผู้แจ้งที่ไม่ใช่หัวหน้ากะหรือแอดมิน (สองโรลนั้นใช้แก้เสร็จหน้างานและปิดงานเองอยู่แล้ว)
+    var ownReporter = job.ReporterID === user.UserID && ['LEAD', 'ADMIN'].indexOf(user.Role) < 0;
     return {
       addNoti: (manager && s === JOB_STATUS.PENDING_NOTI) || ownNoti,
       fixOnSite: manager && noNoti && s === JOB_STATUS.PENDING_NOTI,
       cancel: (manager && s === JOB_STATUS.PENDING_NOTI) || (admin && (s === JOB_STATUS.IN_REPAIR || s === JOB_STATUS.REPAIRED)),
       repair: (user.Role === 'TECH' || admin) && s === JOB_STATUS.IN_REPAIR,
       close: manager && s === JOB_STATUS.REPAIRED,
+      // ใบงาน 29: ผู้แจ้งยืนยันว่าหายแล้ว/ยังไม่หาย หลังช่างซ่อมเสร็จ (งานแก้เองไม่ต้องยืนยันซ้ำ)
+      confirm: ownReporter && s === JOB_STATUS.REPAIRED && Boolean(text(job.NotiNo)),
+      // ใบงาน 25: ผู้แจ้งแก้เองแล้วส่งหลักฐาน เฉพาะเมื่อสวิตช์ปิดงานโดยไม่เปิด Noti เปิดอยู่
+      selfFix: ownReporter && noNoti && s === JOB_STATUS.PENDING_NOTI,
       // บันทึกการตาม (ใบงาน 21): คนโดนตาม ช่าง Planner และแอดมิน เฉพาะงานกำลังซ่อม
       followUp: ['TECH', 'PLANNER', 'ADMIN'].indexOf(user.Role) >= 0 && s === JOB_STATUS.IN_REPAIR,
       cancelReasons: reasons,
@@ -560,6 +566,27 @@ var Core = (function () {
     if (last && last.nextDate > String(now).slice(0, 10)) return { state: FOLLOW_UP_STATE.ANSWERED, last: last };
     var late = overdueInfo(job, logs, now, config).overdue;
     return { state: late ? FOLLOW_UP_STATE.AWAITING : '', last: last };
+  }
+
+  // ---------- ผู้แจ้งยืนยันหลังซ่อม (ใบงาน 29) ----------
+
+  // CONFIRMED = ผู้แจ้งกดหายแล้ว · WAITING = ยังไม่ครบเวลา · LATE = เกิน REPORTER_CONFIRM_HOURS แล้วยังไม่กด
+  var REPORTER_CONFIRM = { CONFIRMED: 'CONFIRMED', WAITING: 'WAITING', LATE: 'LATE' };
+
+  // สภาพการยืนยันของผู้แจ้งในรอบซ่อมเสร็จปัจจุบัน { state, at } · งานที่ไม่ได้รอยืนยัน (สถานะอื่น หรืองานแก้เองไม่มีเลข Noti) คืน state ว่าง
+  function reporterConfirmInfo(job, logs, now, config) {
+    if (job.Status !== JOB_STATUS.REPAIRED || !text(job.NotiNo)) return { state: '', at: '' };
+    var since = statusSince(job, logs);
+    var at = '';
+    (logs || []).forEach(function (l) {
+      if (l.JobID && l.JobID !== job.JobID) return;
+      if (l.Action === 'CONFIRM' && String(l.At) >= since && String(l.At) > at) at = String(l.At);
+    });
+    if (at) return { state: REPORTER_CONFIRM.CONFIRMED, at: at };
+    var a = parseTime(since);
+    var b = parseTime(now);
+    var late = a !== null && b !== null && b - a > configNumber(config, 'REPORTER_CONFIRM_HOURS', 24) * 3600000;
+    return { state: late ? REPORTER_CONFIRM.LATE : REPORTER_CONFIRM.WAITING, at: '' };
   }
 
   // ---------- สรุปงานค้าง (ใบงาน 16, 17) ----------
@@ -653,6 +680,8 @@ var Core = (function () {
     CANCEL_REASON: CANCEL_REASON,
     jobPermissions: jobPermissions,
     canOpenNoti: canOpenNoti,
+    REPORTER_CONFIRM: REPORTER_CONFIRM,
+    reporterConfirmInfo: reporterConfirmInfo,
     FOLLOW_UP: FOLLOW_UP,
     FOLLOW_UP_STATE: FOLLOW_UP_STATE,
     FOLLOW_UP_MAX_DAYS: FOLLOW_UP_MAX_DAYS,

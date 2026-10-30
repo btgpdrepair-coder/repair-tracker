@@ -1099,6 +1099,8 @@
       item.appendChild(el('small', 'muted', [job.areaName, job.locationDetail].filter(Boolean).join(' · ')));
       item.appendChild(el('small', 'muted', 'แจ้งเมื่อ ' + shortTime(job.createdAt)));
       if (job.followUp) item.appendChild(followUpBadges(job.followUp));
+      // ใบงาน 29: ช่างซ่อมเสร็จแล้ว รอผู้แจ้งไปดูแล้วกดยืนยัน
+      if (job.needsConfirm) item.appendChild(badge('ซ่อมเสร็จ รอคุณยืนยัน', 'warn'));
       card.appendChild(item);
     });
     main.appendChild(card);
@@ -1117,6 +1119,9 @@
     CLOSE: 'ปิดงาน',
     SEND_BACK: 'ส่งกลับให้ช่าง',
     FOLLOW_UP: 'บันทึกการตาม',
+    CONFIRM: 'ผู้แจ้งยืนยันว่าหายแล้ว',
+    NOT_FIXED: 'ผู้แจ้งแจ้งว่ายังไม่หาย',
+    SELF_FIX: 'ผู้แจ้งแก้เอง',
   };
 
   // nav คือหน้าที่เปิดมา { label, go(notice) } ใช้ทำปุ่มย้อนกลับ (ไม่มีถ้าเปิดจากลิงก์ตรง)
@@ -1146,6 +1151,21 @@
     box.appendChild(sentBack ? badge('ส่งกลับ', 'back') : badge(label[0], label[1]));
     if (overdue && overdue.overdue) box.appendChild(badge('ค้างเกิน ' + overdue.limit, 'err'));
     return box;
+  }
+
+  // ข้อความนำหน้าเหตุผลที่ส่งกลับ: ผู้แจ้งบอกว่ายังไม่หาย (ใบงาน 29) · งานแก้เองที่ถูกส่งกลับ (ใบงาน 25) · หัวหน้ากะส่งกลับให้ช่าง
+  function sentBackText(data) {
+    if (data.sentBack.byReporter) return 'ผู้แจ้งบอกว่ายังไม่หาย: ';
+    return data.job.status === 'PENDING_NOTI' ? 'หัวหน้ากะส่งกลับ: ' : 'ส่งกลับให้ช่าง: ';
+  }
+
+  // ป้ายการยืนยันในคิวรอปิด (ใบงาน 25, 29)
+  function confirmBadge(job) {
+    if (job.selfFix) return badge('ผู้แจ้งแก้เอง · ไม่มี Noti', 'off');
+    if (job.reporterConfirm === 'CONFIRMED') return badge('ผู้แจ้งยืนยันแล้ว', 'ok');
+    if (job.reporterConfirm === 'WAITING') return badge('รอผู้แจ้งยืนยัน', 'info');
+    if (job.reporterConfirm === 'LATE') return badge('ผู้แจ้งยังไม่ยืนยัน', 'warn');
+    return null;
   }
 
   // ป้ายเดียวของงานในรายการ: ค้าง > ส่งกลับ > สถานะ
@@ -1321,10 +1341,12 @@
     if (job.cancelReason) card.appendChild(row('เหตุผลที่ยกเลิก', el('span', '', job.cancelReason)));
     if (job.closedWithoutNoti) card.appendChild(row('ปิดงาน', el('span', '', 'แก้เสร็จหน้างาน ไม่เปิด Noti')));
     if (job.detail) card.appendChild(el('p', 'notice', job.detail));
-    if (data.sentBack) card.appendChild(el('p', 'sent-back', 'ส่งกลับให้ช่าง: ' + data.sentBack.note));
+    if (data.sentBack) card.appendChild(el('p', 'sent-back', sentBackText(data) + data.sentBack.note));
     main.appendChild(card);
     var follow = followUpCard(me, data, self);
     if (follow) main.appendChild(follow);
+    var confirmCard = reporterConfirmCard(me, data, self);
+    if (confirmCard) main.appendChild(confirmCard);
 
     // รูปก่อนซ่อม (และหลังซ่อมรอบล่าสุดถ้ามี) วางคู่กัน แตะรูปดูเต็มจอ
     var photos = el('section', 'card');
@@ -1344,7 +1366,7 @@
       var text = (ACTION_LABEL[h.action] || h.action);
       var to = Core.JOB_STATUS_LABEL[h.toStatus];
       // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" แต่ไม่ใช่ "ซ่อมเสร็จ → ซ่อมเสร็จ")
-      var obvious = h.action === 'EDIT' || h.action === 'FOLLOW_UP' || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
+      var obvious = h.action === 'EDIT' || h.action === 'FOLLOW_UP' || h.action === 'CONFIRM' || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
       if (to && !obvious && text.indexOf(to[0]) < 0) text += ' → ' + to[0];
       item.appendChild(el('strong', '', text));
       item.appendChild(el('small', 'muted', shortTime(h.at) + (h.by ? ' · ' + h.by : '')));
@@ -1370,6 +1392,7 @@
     if (a.addNoti) actions.appendChild(actionButton('primary', 'เปิด Noti', function () { showNotiForm(me, data, self); }));
     if (a.fixOnSite) actions.appendChild(actionButton('', 'แก้เสร็จหน้างานแล้ว', function () { showFixOnSite(me, data, self); }));
     if (a.repair) actions.appendChild(actionButton('primary', 'แนบรูปหลังซ่อม', function () { showAfterRepair(me, data, self); }));
+    if (a.selfFix) actions.appendChild(actionButton('', 'แก้เองแล้ว', function () { showSelfFix(me, data, self); }));
     if (a.close) closeControls(me, data, actions, self);
     if (a.cancel) actions.appendChild(actionButton('danger', 'ยกเลิกงาน', function () { showCancel(me, data, self); }));
     if (actions.childNodes.length) main.appendChild(actions);
@@ -1382,7 +1405,8 @@
     return b;
   }
 
-  // ปิดงาน (ใบงาน 14): ต้องติ๊ก "ตรวจหน้างานกับผู้แจ้งแล้ว" ก่อน กดโดยไม่ติ๊กขึ้นข้อความเตือน ไม่ปิดปุ่มเป็นสีเทา
+  // ปิดงาน (ใบงาน 14): ต้องติ๊ก "ยืนยันว่าซ่อมเสร็จจริง" ก่อน กดโดยไม่ติ๊กขึ้นข้อความเตือน ไม่ปิดปุ่มเป็นสีเทา
+  // หลักการปิดงาน (30 ต.ค. 2026): หัวหน้ากะตรวจด้วยวิธีไหนก็ได้ (ไปดูเอง ดูรูป หรือดูที่ผู้แจ้งยืนยัน) และรับผิดชอบคำยืนยัน
   function closeControls(me, data, actions, self) {
     var job = data.job;
     var box = el('div', 'field');
@@ -1391,13 +1415,13 @@
     var tick = document.createElement('input');
     tick.type = 'checkbox';
     label.appendChild(tick);
-    label.appendChild(el('span', '', 'ตรวจหน้างานกับผู้แจ้งแล้ว'));
+    label.appendChild(el('span', '', 'ยืนยันว่าซ่อมเสร็จจริง'));
     box.appendChild(label);
     var warn = el('small', 'field-error');
     box.appendChild(warn);
     actions.appendChild(box);
     var close = actionButton('primary', 'ปิดงาน', function () {
-      if (!tick.checked) { warn.textContent = 'ติ๊ก "ตรวจหน้างานกับผู้แจ้งแล้ว" ก่อนปิดงาน'; return; }
+      if (!tick.checked) { warn.textContent = 'ติ๊ก "ยืนยันว่าซ่อมเสร็จจริง" ก่อนปิดงาน'; return; }
       warn.textContent = '';
       close.disabled = true;
       close.textContent = 'กำลังปิดงาน…';
@@ -1433,7 +1457,7 @@
     info.appendChild(el('small', 'muted', [data.reporter.name, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ')));
     line.appendChild(info);
     card.appendChild(line);
-    if (data.sentBack) card.appendChild(el('p', 'sent-back', 'ส่งกลับให้ช่าง: ' + data.sentBack.note));
+    if (data.sentBack) card.appendChild(el('p', 'sent-back', sentBackText(data) + data.sentBack.note));
     var tools = el('div', 'toolbar');
     if (data.reporter.phone) {
       var call = el('a', 'button-link small', 'โทรหาผู้แจ้ง');
@@ -1801,6 +1825,113 @@
     main.appendChild(form);
   }
 
+  // ---------- ผู้แจ้งยืนยัน (ใบงาน 29) และผู้แจ้งแก้เอง (ใบงาน 25) ----------
+
+  // กล่องในหน้ารายละเอียด: ผู้แจ้งเห็นปุ่มหายแล้ว/ยังไม่หาย · หัวหน้ากะเห็นว่าผู้แจ้งยืนยันแล้วหรือยัง
+  function reporterConfirmCard(me, data, self) {
+    var info = data.reporterConfirm || {};
+    var a = data.actions || {};
+    if (!a.confirm && !info.state) return null;
+    var card = el('section', 'card');
+    var head = el('div', 'job-head');
+    head.appendChild(el('h2', 'card-title', 'ผู้แจ้งยืนยัน'));
+    // ป้ายสถานะการยืนยันมีไว้ให้หัวหน้ากะดู ผู้แจ้งที่ยังต้องกดเห็นแค่ปุ่ม
+    var b = !a.confirm && confirmBadge({ reporterConfirm: info.state });
+    if (b) head.appendChild(b);
+    card.appendChild(head);
+    if (info.state === 'CONFIRMED') {
+      card.appendChild(el('p', 'muted', 'ผู้แจ้งยืนยันว่าหายแล้ว · ' + shortTime(info.at)));
+      return card;
+    }
+    if (!a.confirm) {
+      card.appendChild(el('p', 'muted', 'ผู้แจ้งยังไม่ได้กดยืนยัน หัวหน้ากะปิดงานได้เลยถ้ายืนยันเองว่าซ่อมเสร็จจริง'));
+      return card;
+    }
+    card.appendChild(el('p', '', 'ช่างซ่อมเสร็จแล้ว ไปดูที่หน้างานแล้วบอกเราว่าหายหรือยัง'));
+    var error = el('p', 'error hidden');
+    var ok = actionButton('primary', 'หายแล้ว', function () {
+      ok.disabled = true;
+      ok.textContent = 'กำลังส่ง…';
+      api('confirmRepair', { jobId: data.job.jobId })
+        .then(function (res) {
+          if (res.ok) return self.go('ขอบคุณ ส่งให้หัวหน้ากะปิดงานแล้ว');
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          ok.disabled = false;
+          ok.textContent = 'หายแล้ว';
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          ok.disabled = false;
+          ok.textContent = 'หายแล้ว';
+        });
+    });
+    card.appendChild(ok);
+    card.appendChild(actionButton('', 'ยังไม่หาย', function () { showNotFixed(me, data, self); }));
+    card.appendChild(error);
+    return card;
+  }
+
+  // ผู้แจ้งบอกว่ายังไม่หาย: เหตุผลบังคับ แล้วงานกลับไปให้ช่างทันที
+  function showNotFixed(me, data, nav) {
+    var job = data.job;
+    var main = screen('ยังไม่หาย');
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'ยังไม่หาย'));
+    var reason = '';
+    textArea(form, 'reason', 'ยังไม่หายตรงไหน (บังคับ)', 'เช่น ยังซึมที่ข้อต่อด้านล่าง', '', function (t) { reason = t; });
+    form.appendChild(el('p', 'notice', 'งานกลับไปให้ช่างซ่อมต่อ พร้อมข้อความนี้'));
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', 'ส่งกลับให้ช่าง');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var fields = reason.trim() ? {} : { reason: 'กรุณาบอกว่ายังไม่หายตรงไหน' };
+      showFieldErrors(form, fields);
+      if (fields.reason) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังส่ง…';
+      error.classList.add('hidden');
+      api('rejectRepair', { jobId: job.jobId, reason: reason.trim() })
+        .then(function (res) {
+          if (res.ok) return nav.go('ส่งกลับให้ช่างแล้ว');
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'ส่งกลับให้ช่าง';
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'ส่งกลับให้ช่าง';
+        });
+    });
+    main.appendChild(form);
+  }
+
+  // ผู้แจ้งแก้เองแล้ว (ใบงาน 25): รูปหลังแก้ + บันทึก แล้วรอหัวหน้ากะตรวจและปิด
+  function showSelfFix(me, data, nav) {
+    showRepairForm(me, data, nav, {
+      title: 'แก้เองแล้ว',
+      photoLabel: 'ถ่ายรูปหลังแก้ 1–3 รูป *',
+      noteLabel: 'แก้อะไรไป (บังคับ)',
+      notePlaceholder: 'เช่น ขันน็อตที่หลวม',
+      noteMissing: 'กรุณาบอกว่าแก้อะไรไป',
+      notice: 'งานไม่ต้องเปิด Noti · หัวหน้ากะจะตรวจแล้วปิดงาน',
+      button: 'ส่ง แก้เสร็จแล้ว',
+      action: 'selfFix',
+      done: function () { nav.go('ส่งแล้ว รอหัวหน้ากะตรวจและปิดงาน'); },
+    });
+  }
+
   // แก้เสร็จหน้างาน: ปิดงานโดยไม่เปิด Noti (สวิตช์ ALLOW_CLOSE_WITHOUT_NOTI เปิด)
   function showFixOnSite(me, data, nav) {
     showRepairForm(me, data, nav, {
@@ -1840,7 +1971,7 @@
     card.appendChild(el('p', 'muted', 'บันทึกซ่อมเสร็จแล้ว'));
     card.appendChild(el('p', 'job-id', job.jobId));
     card.appendChild(el('p', '', job.title));
-    card.appendChild(el('p', 'notice', 'หัวหน้ากะแผนก' + job.department + ' จะตรวจหน้างานกับผู้แจ้ง แล้วปิดงาน'));
+    card.appendChild(el('p', 'notice', 'ผู้แจ้งจะกดยืนยันว่าหายแล้ว แล้วหัวหน้ากะแผนก' + job.department + ' ปิดงาน · บอกผู้แจ้งด้วยว่าซ่อมเสร็จแล้ว'));
     card.appendChild(actionButton('primary', 'กลับไปที่แชท', function () { liff.closeWindow(); }));
     card.appendChild(actionButton('', 'ดูงานรอซ่อม', function () { showQueue(me, 'repair'); }));
     main.appendChild(card);
@@ -1948,10 +2079,12 @@
       info.appendChild(top);
       info.appendChild(el('small', 'muted', [job.areaName, job.locationDetail].filter(Boolean).join(' · ')));
       var meta = view === 'close'
-        ? 'ซ่อมเสร็จ ' + Core.ageText(job.repairedAt || job.since, data.now) + 'ก่อน' + (job.repairedBy ? ' · ช่าง ' + job.repairedBy : '')
+        ? 'ซ่อมเสร็จ ' + Core.ageText(job.repairedAt || job.since, data.now) + 'ก่อน' + (job.repairedBy ? (job.selfFix ? ' · แก้เองโดย ' : ' · ช่าง ') + job.repairedBy : '')
         : [job.reporterName, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ');
       info.appendChild(el('small', 'muted', (me.role === 'LEAD' ? '' : job.department + ' · ') + meta));
       if (job.followUp) info.appendChild(followUpBadges(job.followUp));
+      var confirm = view === 'close' && confirmBadge(job);
+      if (confirm) info.appendChild(confirm);
       item.appendChild(info);
       item.addEventListener('click', function () {
         if (view === 'noti') openNotiForm(me, job.jobId, nav);

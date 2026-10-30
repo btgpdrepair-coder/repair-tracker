@@ -23,6 +23,9 @@
     PLANNER: 'Planner',
     TECH: 'ช่าง',
     ADMIN: 'แอดมิน',
+    SAFETY: 'จป',
+    DEPT_HEAD: 'หัวหน้าแผนก',
+    DIRECTOR: 'ผอ.',
   };
 
   // คำอธิบายโรลในหน้าลงทะเบียน (ตาม mockup)
@@ -31,6 +34,9 @@
     LEAD: 'เปิด Noti ใน SAP ยกเลิก และปิดงาน ของแผนกตัวเอง',
     PLANNER: 'ดูสรุปงานค้างทั้งหมด',
     TECH: 'ดูงานรอซ่อม และแนบรูปหลังซ่อม',
+    SAFETY: 'ประเมินงานที่กระทบความปลอดภัย ทุกแผนก',
+    DEPT_HEAD: 'ดูงานของแผนกตัวเอง (หัวหน้าแผนกผลิตประเมินงานที่กระทบการผลิตและ NCP)',
+    DIRECTOR: 'ดูภาพรวมงานซ่อมทุกแผนก',
   };
 
   // ข้อความแจ้งเรื่องข้อมูล ตามหัวข้อ "กติกาหน้าจอ" ในสเปก
@@ -474,7 +480,7 @@
   // ---------- แจ้งงาน 4 ขั้น (ใบงาน 06 · docs/design/UI.md หัวข้อ "แจ้งงาน") ----------
 
   // ช่องของแต่ละขั้น ใช้เลือกข้อความผิดจาก Core.validateJob มาแสดงเฉพาะขั้นที่อยู่
-  var STEP_FIELDS = { 1: ['photos'], 2: ['asset', 'symptom'], 3: ['area', 'locationDetail'], 4: ['detail', 'notiNo', 'sapShortText'] };
+  var STEP_FIELDS = { 1: ['photos'], 2: ['asset', 'symptom'], 3: ['area', 'locationDetail'], 4: ['impacts', 'detail', 'notiNo', 'sapShortText'] };
   var MIC_HINT = 'กดไมค์บนแป้นพิมพ์เพื่อพูดแทนพิมพ์ได้';
 
   // แบบร่างเก็บในเครื่อง (รวมรูป) ปิดแอปกลางคันแล้วเปิดใหม่ยังอยู่ · ที่เก็บเต็มหรือถูกปิดก็ใช้ต่อได้แค่ไม่มีแบบร่าง
@@ -791,6 +797,8 @@
             areaOther: res.data.lastAreaOther || '',
           };
         }
+        // ใบงาน 27: ผลกระทบบังคับเลือก (แบบร่างเก่าที่ยังไม่มีช่องนี้เริ่มที่ยังไม่เลือก)
+        if (!Array.isArray(draft.impacts)) draft.impacts = [];
         showReportStep(me, res.data, draft, draft.step || 1);
       })
       .catch(function () { showError('โหลดหน้าแจ้งงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
@@ -881,6 +889,7 @@
       if (options.noti) {
         form.appendChild(el('p', 'notice', 'แจ้งแทนคนอื่น: ใส่ชื่อและเบอร์ของคนแจ้งจริงในรายละเอียด · ถ้าเปิด Noti ใน SAP แล้ว ใส่เลข Noti ด้านล่าง งานจะเข้าคิวรอซ่อมทันที'));
       }
+      impactChips(form, draft, persist);
       textArea(form, 'detail', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)', options.noti ? 'เช่น คุณสมมุติ 0812345678 โทรมาแจ้ง' : 'เช่น เริ่มรั่วตั้งแต่เช้า',
         draft.detail, function (text) { draft.detail = text; persist(); });
       if (options.noti) {
@@ -966,6 +975,47 @@
     }
   }
 
+  // ใบงาน 27: "งานนี้กระทบอะไร" บังคับเลือก · 3 ด้านเลือกได้หลายข้อ · "ไม่กระทบ" เลือกเดี่ยว
+  function impactChips(form, draft, persist) {
+    var body = group(form, 'impacts', 'งานนี้กระทบอะไร *');
+    var row = el('div', 'chips');
+    var codes = Object.keys(Core.IMPACT).concat([Core.IMPACT_NONE]);
+    function render() {
+      row.innerHTML = '';
+      codes.forEach(function (code) {
+        var chip = el('button', 'chip', code === Core.IMPACT_NONE ? Core.IMPACT_NONE_LABEL : Core.IMPACT[code]);
+        chip.type = 'button';
+        chip.setAttribute('aria-pressed', String(draft.impacts.indexOf(code) >= 0));
+        chip.addEventListener('click', function () {
+          var on = draft.impacts.indexOf(code) >= 0;
+          if (code === Core.IMPACT_NONE) draft.impacts = on ? [] : [code];
+          else {
+            draft.impacts = draft.impacts.filter(function (c) { return c !== Core.IMPACT_NONE && c !== code; });
+            if (!on) draft.impacts.push(code);
+          }
+          persist();
+          render();
+        });
+        row.appendChild(chip);
+      });
+    }
+    render();
+    body.appendChild(row);
+    body.appendChild(el('small', 'muted', 'ไลน์หยุดหรือมีคนเสี่ยงอันตราย โทรแจ้งก่อน แล้วค่อยแจ้งในระบบ'));
+  }
+
+  // ป้ายผลกระทบในรายการ (ใบงาน 27): รอประเมิน · ระดับด่วนมาก/ด่วน
+  function impactBadges(impact) {
+    var box = el('span', 'badges');
+    if (!impact) return box;
+    if (impact.level === 'URGENT') box.appendChild(badge('ด่วนมาก', 'err'));
+    else if (impact.level === 'HIGH') box.appendChild(badge('ด่วน', 'warn'));
+    if (impact.pending.length) {
+      box.appendChild(badge('รอประเมิน · ' + impact.pending.map(function (c) { return Core.IMPACT[c]; }).join(', '), 'info'));
+    }
+    return box;
+  }
+
   // เลือกเฉพาะข้อความผิดของช่องที่ระบุ (ข้อผิดของช่อง "อื่น ๆ" แสดงใต้กลุ่มปุ่มที่อยู่ติดกัน)
   function pickFields(fields, names) {
     var out = {};
@@ -989,6 +1039,7 @@
       locationDetail: draft.locationDetail,
       detail: draft.detail,
       clientRequestId: draft.clientRequestId,
+      impacts: draft.impacts,
       // งานแจ้งแทนพร้อมเลข Noti (เฉพาะหัวหน้ากะและแอดมิน backend ตรวจสิทธิ์ซ้ำ)
       notiNo: options.noti ? draft.notiNo : undefined,
       sapShortText: options.noti ? draft.sapShortText : undefined,
@@ -1099,6 +1150,7 @@
       item.appendChild(el('small', 'muted', [job.areaName, job.locationDetail].filter(Boolean).join(' · ')));
       item.appendChild(el('small', 'muted', 'แจ้งเมื่อ ' + shortTime(job.createdAt)));
       if (job.followUp) item.appendChild(followUpBadges(job.followUp));
+      if (job.impact) item.appendChild(impactBadges(job.impact));
       // ใบงาน 29: ช่างซ่อมเสร็จแล้ว รอผู้แจ้งไปดูแล้วกดยืนยัน
       if (job.needsConfirm) item.appendChild(badge('ซ่อมเสร็จ รอคุณยืนยัน', 'warn'));
       card.appendChild(item);
@@ -1122,6 +1174,8 @@
     CONFIRM: 'ผู้แจ้งยืนยันว่าหายแล้ว',
     NOT_FIXED: 'ผู้แจ้งแจ้งว่ายังไม่หาย',
     SELF_FIX: 'ผู้แจ้งแก้เอง',
+    IMPACT: 'ติ๊กผลกระทบ',
+    ASSESS: 'ประเมินความเร่งด่วน',
   };
 
   // nav คือหน้าที่เปิดมา { label, go(notice) } ใช้ทำปุ่มย้อนกลับ (ไม่มีถ้าเปิดจากลิงก์ตรง)
@@ -1347,6 +1401,8 @@
     if (follow) main.appendChild(follow);
     var confirmCard = reporterConfirmCard(me, data, self);
     if (confirmCard) main.appendChild(confirmCard);
+    var impact = impactCard(me, data, self);
+    if (impact) main.appendChild(impact);
 
     // รูปก่อนซ่อม (และหลังซ่อมรอบล่าสุดถ้ามี) วางคู่กัน แตะรูปดูเต็มจอ
     var photos = el('section', 'card');
@@ -1366,7 +1422,7 @@
       var text = (ACTION_LABEL[h.action] || h.action);
       var to = Core.JOB_STATUS_LABEL[h.toStatus];
       // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" แต่ไม่ใช่ "ซ่อมเสร็จ → ซ่อมเสร็จ")
-      var obvious = h.action === 'EDIT' || h.action === 'FOLLOW_UP' || h.action === 'CONFIRM' || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
+      var obvious = ['EDIT', 'FOLLOW_UP', 'CONFIRM', 'IMPACT', 'ASSESS'].indexOf(h.action) >= 0 || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
       if (to && !obvious && text.indexOf(to[0]) < 0) text += ' → ' + to[0];
       item.appendChild(el('strong', '', text));
       item.appendChild(el('small', 'muted', shortTime(h.at) + (h.by ? ' · ' + h.by : '')));
@@ -1825,6 +1881,118 @@
     main.appendChild(form);
   }
 
+  // ---------- ผลกระทบและการประเมิน (ใบงาน 27) ----------
+
+  var LEVEL_KIND = { URGENT: 'err', HIGH: 'warn', NORMAL: 'info', LOW: 'off' };
+
+  function impactCard(me, data, self) {
+    var info = data.impact;
+    if (!info || (!info.impacts.length && !info.none && !info.canAdd.length)) return null;
+    var card = el('section', 'card');
+    var head = el('div', 'job-head');
+    head.appendChild(el('h2', 'card-title', 'ผลกระทบ'));
+    if (info.level) head.appendChild(badge(Core.LEVEL[info.level], LEVEL_KIND[info.level]));
+    card.appendChild(head);
+    if (info.none) card.appendChild(el('p', 'muted', Core.IMPACT_NONE_LABEL));
+    info.impacts.forEach(function (i) {
+      var item = el('div', 'history');
+      var top = el('div', 'job-head');
+      top.appendChild(el('strong', '', i.label));
+      top.appendChild(i.level ? badge(Core.LEVEL[i.level], LEVEL_KIND[i.level]) : badge('รอประเมิน', 'info'));
+      item.appendChild(top);
+      if (i.note) item.appendChild(el('small', '', i.note));
+      if (i.by) item.appendChild(el('small', 'muted', 'ประเมินโดย ' + i.by + ' · ' + shortTime(i.at)));
+      if (i.canAssess) {
+        item.appendChild(actionButton(i.level ? 'small' : 'primary small', i.level ? 'เปลี่ยนระดับ' : 'ประเมิน',
+          function () { showAssess(me, data, i, self); }));
+      }
+      card.appendChild(item);
+    });
+    if (info.deadline) {
+      card.appendChild(el('small', info.late ? 'field-error' : 'muted', 'ต้องแก้ภายใน ' + shortTime(info.deadline) + (info.late ? ' (เลยกำหนดแล้ว)' : '')));
+    }
+    if (info.canAdd.length) {
+      var add = el('div', 'chips');
+      info.canAdd.forEach(function (code) {
+        var chip = el('button', 'chip', '+ ' + Core.IMPACT[code]);
+        chip.type = 'button';
+        chip.addEventListener('click', function () {
+          if (!window.confirm('ติ๊กเพิ่มว่างานนี้กระทบ' + Core.IMPACT[code] + '? ติ๊กแล้วเอาออกไม่ได้')) return;
+          chip.disabled = true;
+          api('addImpact', { jobId: data.job.jobId, impact: code })
+            .then(function (res) {
+              if (res.ok) return self.go('ติ๊กผลกระทบ' + Core.IMPACT[code] + 'แล้ว รอประเมิน');
+              chip.disabled = false;
+              window.alert(res.error.message);
+            })
+            .catch(function () { chip.disabled = false; window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง'); });
+        });
+        add.appendChild(chip);
+      });
+      card.appendChild(el('small', 'muted', 'ติ๊กผลกระทบเพิ่ม'));
+      card.appendChild(add);
+    }
+    return card;
+  }
+
+  // ฟอร์มประเมินความเร่งด่วน 1 ด้าน: 4 ระดับ + หมายเหตุ (ไม่บังคับ)
+  function showAssess(me, data, impact, nav) {
+    var main = screen('ประเมิน' + impact.label);
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'ประเมิน' + impact.label));
+    var box = el('fieldset', 'field');
+    box.dataset.field = 'level';
+    box.appendChild(el('legend', '', 'ความเร่งด่วน *'));
+    Core.LEVEL_ORDER.forEach(function (code) {
+      var option = el('label', 'choice');
+      var radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'level';
+      radio.value = code;
+      radio.checked = impact.level === code;
+      option.appendChild(radio);
+      option.appendChild(el('span', '', Core.LEVEL[code]));
+      box.appendChild(option);
+    });
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+    var note = impact.note || '';
+    textArea(form, 'note', 'กระทบอะไร (ไม่บังคับ)', 'เช่น พื้นลื่นทางเดินหลัก ให้กั้นพื้นที่ก่อน', note, function (t) { note = t; });
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', 'บันทึกการประเมิน');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var picked = form.querySelector('input[name="level"]:checked');
+      var fields = picked ? {} : { level: 'กรุณาเลือกระดับความเร่งด่วน' };
+      showFieldErrors(form, fields);
+      if (!picked) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังบันทึก…';
+      api('assessImpact', { jobId: data.job.jobId, impact: impact.code, level: picked.value, note: note.trim() })
+        .then(function (res) {
+          if (res.ok) return nav.go('ประเมิน' + impact.label + 'แล้ว: ' + Core.LEVEL[picked.value]);
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          error.textContent = res.error.message;
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'บันทึกการประเมิน';
+        })
+        .catch(function () {
+          error.textContent = 'ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง';
+          error.classList.remove('hidden');
+          submit.disabled = false;
+          submit.textContent = 'บันทึกการประเมิน';
+        });
+    });
+    main.appendChild(form);
+  }
+
   // ---------- ผู้แจ้งยืนยัน (ใบงาน 29) และผู้แจ้งแก้เอง (ใบงาน 25) ----------
 
   // กล่องในหน้ารายละเอียด: ผู้แจ้งเห็นปุ่มหายแล้ว/ยังไม่หาย · หัวหน้ากะเห็นว่าผู้แจ้งยืนยันแล้วหรือยัง
@@ -2024,8 +2192,8 @@
 
   // ---------- คิวงาน (ใบงาน 10, 13, 14) และงานทั้งหมด (ใบงาน 15) ----------
 
-  var QUEUE_TITLE = { noti: 'รอเปิด Noti', close: 'รอปิดงาน', repair: 'งานรอซ่อม' };
-  var QUEUE_EMPTY = { noti: 'ไม่มีงานรอเปิด Noti', close: 'ไม่มีงานรอปิด', repair: 'ไม่มีงานรอซ่อม' };
+  var QUEUE_TITLE = { noti: 'รอเปิด Noti', close: 'รอปิดงาน', repair: 'งานรอซ่อม', assess: 'รอประเมิน' };
+  var QUEUE_EMPTY = { noti: 'ไม่มีงานรอเปิด Noti', close: 'ไม่มีงานรอปิด', repair: 'ไม่มีงานรอซ่อม', assess: 'ไม่มีงานที่คุณต้องประเมิน' };
 
   function showQueue(me, view, notice) {
     loading(QUEUE_TITLE[view]);
@@ -2083,6 +2251,7 @@
         : [job.reporterName, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ');
       info.appendChild(el('small', 'muted', (me.role === 'LEAD' ? '' : job.department + ' · ') + meta));
       if (job.followUp) info.appendChild(followUpBadges(job.followUp));
+      if (job.impact) info.appendChild(impactBadges(job.impact));
       var confirm = view === 'close' && confirmBadge(job);
       if (confirm) info.appendChild(confirm);
       item.appendChild(info);
@@ -2167,6 +2336,7 @@
       var parts = me.role === 'LEAD' ? [] : [job.department];
       item.appendChild(el('small', 'muted', parts.concat([job.areaName, Core.ageText(job.createdAt, data.now)]).filter(Boolean).join(' · ')));
       if (job.followUp) item.appendChild(followUpBadges(job.followUp));
+      if (job.impact) item.appendChild(impactBadges(job.impact));
       item.appendChild(el('small', 'muted', job.jobId));
       card.appendChild(item);
     });
@@ -2295,6 +2465,10 @@
     if (page === 'queue-repair') {
       if (['TECH', 'PLANNER', 'ADMIN'].indexOf(me.role) >= 0) return showQueue(me, 'repair');
       return showError('หน้านี้สำหรับช่าง Planner และแอดมิน');
+    }
+    if (page === 'queue-assess') {
+      if (['SAFETY', 'DEPT_HEAD', 'ADMIN'].indexOf(me.role) >= 0) return showQueue(me, 'assess');
+      return showError('หน้านี้สำหรับ จป หัวหน้าแผนก และแอดมิน');
     }
     if (page === 'all') {
       if (me.role !== 'STAFF') return showAllJobs(me);

@@ -5,7 +5,8 @@
  */
 var Core = (function () {
   // โรลของผู้ใช้ (ดู GLOSSARY.md)
-  var ROLES = ['STAFF', 'LEAD', 'PLANNER', 'TECH', 'ADMIN'];
+  // ใบงาน 27: SAFETY = จป · DEPT_HEAD = หัวหน้าแผนก · DIRECTOR = ผอ.
+  var ROLES = ['STAFF', 'LEAD', 'PLANNER', 'TECH', 'ADMIN', 'SAFETY', 'DEPT_HEAD', 'DIRECTOR'];
 
   // สถานะของผู้ใช้ในชีต Users
   var USER_STATUS = {
@@ -70,7 +71,7 @@ var Core = (function () {
   }
 
   // โรลที่ขอได้เองตอนลงทะเบียน แอดมินกำหนดได้อย่างเดียว ขอเองไม่ได้
-  var REQUESTABLE_ROLES = ['STAFF', 'LEAD', 'PLANNER', 'TECH'];
+  var REQUESTABLE_ROLES = ['STAFF', 'LEAD', 'PLANNER', 'TECH', 'SAFETY', 'DEPT_HEAD', 'DIRECTOR'];
 
   var NAME_MAX = 100;
   var DEPARTMENT_MAX = 50;
@@ -294,6 +295,13 @@ var Core = (function () {
 
     if (detail.length > DETAIL_MAX) fields.detail = 'รายละเอียดยาวเกิน ' + DETAIL_MAX + ' ตัวอักษร';
 
+    // ใบงาน 27: ผลกระทบบังคับเลือก (หน้าแอปรุ่นเก่าที่ไม่ส่งช่องนี้ยังแจ้งได้)
+    var impacts = null;
+    if (input.impacts !== undefined) {
+      var ic = validateImpacts(input.impacts);
+      if (!ic.ok) fields.impacts = ic.message;
+      impacts = ic.value;
+    }
     return {
       ok: Object.keys(fields).length === 0,
       fields: fields,
@@ -308,6 +316,7 @@ var Core = (function () {
         locationDetail: locationDetail,
         detail: detail,
         title: jobTitle(asset, symptomLabel),
+        impacts: impacts,
       },
     };
   }
@@ -343,6 +352,87 @@ var Core = (function () {
   // สถานะที่ยังไม่จบ (นับค้างได้)
   var OPEN_STATUSES = [JOB_STATUS.PENDING_NOTI, JOB_STATUS.IN_REPAIR, JOB_STATUS.REPAIRED];
 
+  // ---------- ผลกระทบและการประเมินความเร่งด่วน (ใบงาน 27) ----------
+  // เก็บในแถว StatusLog (ไม่เพิ่มคอลัมน์): IMPACT Note = "SAFETY,PRODUCTION" หรือ "NONE" · ASSESS Note = "SAFETY:URGENT · หมายเหตุ"
+
+  var IMPACT = { SAFETY: 'ความปลอดภัย', PRODUCTION: 'การผลิต', NCP: 'NCP (ของเสีย)' };
+  var IMPACT_NONE = 'NONE';
+  var IMPACT_NONE_LABEL = 'ไม่กระทบ (งานทั่วไป)';
+  var LEVEL = { URGENT: 'ด่วนมาก', HIGH: 'ด่วน', NORMAL: 'ปกติ', LOW: 'ไม่เร่งด่วน' };
+  var LEVEL_ORDER = ['URGENT', 'HIGH', 'NORMAL', 'LOW'];
+  // กำหนดแก้นับจากเวลาแจ้ง (วัน) ปรับใน Config · ไม่เร่งด่วนไม่มีกำหนด
+  var LEVEL_DAYS = { URGENT: ['LEVEL_URGENT_DAYS', 1], HIGH: ['LEVEL_HIGH_DAYS', 3], NORMAL: ['LEVEL_NORMAL_DAYS', 7] };
+  var ASSESS_NOTE = /^([A-Z]+):([A-Z]+)(?: · ([\s\S]*))?$/;
+
+  // ผลกระทบที่ผู้แจ้งเลือก ต้องมีอย่างน้อย 1 · "ไม่กระทบ" เลือกเดี่ยว คืน { ok, message, value }
+  function validateImpacts(value) {
+    var codes = (Array.isArray(value) ? value : []).map(text).filter(function (c, i, all) { return c && all.indexOf(c) === i; });
+    var known = codes.every(function (c) { return c === IMPACT_NONE || IMPACT[c]; });
+    var message = '';
+    if (!codes.length) message = 'กรุณาเลือกว่างานนี้กระทบอะไร';
+    else if (!known) message = 'ผลกระทบไม่ถูกต้อง';
+    else if (codes.indexOf(IMPACT_NONE) >= 0 && codes.length > 1) message = 'เลือก "ไม่กระทบ" คู่กับข้ออื่นไม่ได้';
+    return { ok: !message, message: message, value: codes };
+  }
+
+  // แผนกที่หัวหน้าแผนกประเมินด้านการผลิตและ NCP ได้ (Config PROD_DEPARTMENT ค่าเริ่มต้น "ผลิต")
+  function prodDepartment(config) {
+    return text((config || {}).PROD_DEPARTMENT) || 'ผลิต';
+  }
+
+  // ผู้ใช้คนนี้ประเมินด้านนี้ได้ไหม: จป = ความปลอดภัย · หัวหน้าแผนกผลิต = การผลิตและ NCP · แอดมินทุกด้าน
+  function canAssess(user, impact, config) {
+    if (!user || !IMPACT[impact]) return false;
+    if (user.Role === 'ADMIN') return true;
+    if (impact === 'SAFETY') return user.Role === 'SAFETY';
+    return user.Role === 'DEPT_HEAD' && text(user.Department) === prodDepartment(config);
+  }
+
+  function addHours(time, hours) {
+    var t = parseTime(time);
+    return t === null ? '' : new Date(t + hours * 3600000).toISOString().slice(0, 19).replace('T', ' ');
+  }
+
+  // ผลกระทบของงานจากประวัติ { impacts, none, assessments: { ด้าน: { level, note, at, byUserId } }, pending, level, deadline, late }
+  // level = ระดับที่ด่วนที่สุดในด้านที่ประเมินแล้ว · deadline = เวลาแจ้ง + วันของระดับนั้น · late = ยังไม่จบและเลยกำหนด
+  function impactInfo(job, logs, now, config) {
+    var impacts = [];
+    var none = false;
+    var assessments = {};
+    (logs || []).filter(function (l) { return !l.JobID || l.JobID === job.JobID; })
+      .sort(function (a, b) { return String(a.At).localeCompare(String(b.At)); })
+      .forEach(function (l) {
+        if (l.Action === 'IMPACT') {
+          String(l.Note || '').split(',').map(text).forEach(function (c) {
+            if (c === IMPACT_NONE) none = !impacts.length;
+            else if (IMPACT[c] && impacts.indexOf(c) < 0) { impacts.push(c); none = false; }
+          });
+        } else if (l.Action === 'ASSESS') {
+          var m = ASSESS_NOTE.exec(String(l.Note || ''));
+          if (m && IMPACT[m[1]] && LEVEL[m[2]]) assessments[m[1]] = { level: m[2], note: m[3] || '', at: String(l.At), byUserId: l.ByUserID || '' };
+        }
+      });
+    var pending = impacts.filter(function (c) { return !assessments[c]; });
+    var level = '';
+    impacts.forEach(function (c) {
+      var a = assessments[c];
+      if (a && (!level || LEVEL_ORDER.indexOf(a.level) < LEVEL_ORDER.indexOf(level))) level = a.level;
+    });
+    var deadline = '';
+    if (LEVEL_DAYS[level]) deadline = addHours(job.CreatedAt, configNumber(config, LEVEL_DAYS[level][0], LEVEL_DAYS[level][1]) * 24);
+    var late = Boolean(deadline) && OPEN_STATUSES.indexOf(job.Status) >= 0 && String(now) > deadline;
+    return { impacts: impacts, none: none, assessments: assessments, pending: pending, level: level, deadline: deadline, late: late };
+  }
+
+  // ลำดับความด่วนสำหรับเรียงคิว: ด่วนมาก 0 · ด่วน 1 · อื่น ๆ 9
+  function levelRank(level) {
+    return level === 'URGENT' ? 0 : level === 'HIGH' ? 1 : 9;
+  }
+
+  function assessNote(impact, level, note) {
+    return impact + ':' + level + (note ? ' · ' + note : '');
+  }
+
   // เกณฑ์งานค้างของสถานะ { hours, label } เช่น { 168, '7 วัน' } สถานะที่จบแล้วคืน null
   function slaLimit(status, config) {
     if (status === JOB_STATUS.PENDING_NOTI) {
@@ -368,13 +458,22 @@ var Core = (function () {
   }
 
   // งานค้างไหม: { overdue, since, limit } limit คือข้อความเกณฑ์ เช่น "24 ชม." ใช้บนป้าย "ค้างเกิน 24 ชม."
+  // ใบงาน 27: งานที่ประเมินระดับแล้ว เลยกำหนดของระดับนั้นนับเป็นงานค้างด้วย แม้ยังไม่เกินเกณฑ์ปกติของสถานะ
   function overdueInfo(job, logs, now, config) {
     var since = statusSince(job, logs);
     var limit = slaLimit(job.Status, config);
     if (!limit) return { overdue: false, since: since, limit: '' };
     var a = parseTime(since);
     var b = parseTime(now);
-    return { overdue: a !== null && b !== null && b - a > limit.hours * 3600000, since: since, limit: limit.label };
+    var overdue = a !== null && b !== null && b - a > limit.hours * 3600000;
+    if (!overdue) {
+      var impact = impactInfo(job, logs, now, config);
+      if (impact.late) {
+        var days = configNumber(config, LEVEL_DAYS[impact.level][0], LEVEL_DAYS[impact.level][1]);
+        return { overdue: true, since: job.CreatedAt, limit: days + ' วัน (' + LEVEL[impact.level] + ')' };
+      }
+    }
+    return { overdue: overdue, since: since, limit: limit.label };
   }
 
   // ---------- เลข Noti (ใบงาน 10) ----------
@@ -680,6 +779,17 @@ var Core = (function () {
     CANCEL_REASON: CANCEL_REASON,
     jobPermissions: jobPermissions,
     canOpenNoti: canOpenNoti,
+    IMPACT: IMPACT,
+    IMPACT_NONE: IMPACT_NONE,
+    IMPACT_NONE_LABEL: IMPACT_NONE_LABEL,
+    LEVEL: LEVEL,
+    LEVEL_ORDER: LEVEL_ORDER,
+    validateImpacts: validateImpacts,
+    prodDepartment: prodDepartment,
+    canAssess: canAssess,
+    impactInfo: impactInfo,
+    levelRank: levelRank,
+    assessNote: assessNote,
     REPORTER_CONFIRM: REPORTER_CONFIRM,
     reporterConfirmInfo: reporterConfirmInfo,
     FOLLOW_UP: FOLLOW_UP,

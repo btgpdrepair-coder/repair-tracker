@@ -161,24 +161,20 @@
     phone.maxLength = 12;
     form.querySelector('[data-field="phone"]').appendChild(el('small', 'muted', 'หัวหน้ากะและช่างใช้โทรถามอาการ คนอื่นไม่เห็นเบอร์นี้'));
 
-    var roleBox = el('fieldset', 'field');
-    roleBox.dataset.field = 'requestedRole';
-    roleBox.appendChild(el('legend', '', 'โรลที่ขอ *'));
+    // โรลที่ขอเป็นดรอปดาวน์ (เจ้าของขอ 31 ต.ค. 2026 · หน้าสั้นลง) คำอธิบายของโรลที่เลือกขึ้นใต้ช่อง
+    var roleSelect = document.createElement('select');
+    var roleEmpty = el('option', '', 'เลือกโรล');
+    roleEmpty.value = '';
+    roleSelect.appendChild(roleEmpty);
     Object.keys(ROLE_HINT).forEach(function (role) {
-      var option = el('label', 'choice');
-      var radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'requestedRole';
-      radio.value = role;
-      option.appendChild(radio);
-      var textBox = el('span', 'choice-text');
-      textBox.appendChild(el('strong', '', ROLE_LABEL[role]));
-      textBox.appendChild(el('small', 'muted', ROLE_HINT[role]));
-      option.appendChild(textBox);
-      roleBox.appendChild(option);
+      var option = el('option', '', ROLE_LABEL[role]);
+      option.value = role;
+      roleSelect.appendChild(option);
     });
-    roleBox.appendChild(el('small', 'field-error'));
-    form.appendChild(roleBox);
+    field(form, 'requestedRole', 'โรลที่ขอ', roleSelect);
+    var roleHint = el('small', 'muted', '');
+    roleSelect.parentNode.insertBefore(roleHint, roleSelect.nextSibling);
+    roleSelect.addEventListener('change', function () { roleHint.textContent = ROLE_HINT[roleSelect.value] || ''; });
 
     var consentBox = el('div', 'field consent');
     consentBox.dataset.field = 'consent';
@@ -202,9 +198,8 @@
     sapLabel.appendChild(sapText);
     // มีผลเฉพาะพนักงานหน้างาน จึงขึ้นเฉพาะตอนเลือกโรลนี้ (หัวหน้ากะใส่เลข Noti ได้อยู่แล้ว โรลอื่นแจ้งงานไม่ได้)
     sapLabel.style.display = 'none';
-    roleBox.addEventListener('change', function () {
-      var picked = form.querySelector('input[name="requestedRole"]:checked');
-      sapLabel.style.display = picked && picked.value === 'STAFF' ? '' : 'none';
+    roleSelect.addEventListener('change', function () {
+      sapLabel.style.display = roleSelect.value === 'STAFF' ? '' : 'none';
     });
     form.appendChild(sapLabel);
     form.appendChild(consentBox);
@@ -217,14 +212,13 @@
 
     form.addEventListener('submit', function (event) {
       event.preventDefault();
-      var checked = form.querySelector('input[name="requestedRole"]:checked');
       var payload = {
         realName: realName.value,
         department: department.value,
         phone: phone.value,
-        requestedRole: checked ? checked.value : '',
+        requestedRole: roleSelect.value,
         consent: consent.checked,
-        canNoti: Boolean(checked && checked.value === 'STAFF' && canNoti.checked),
+        canNoti: roleSelect.value === 'STAFF' && canNoti.checked,
       };
       // ตรวจในเครื่องก่อนด้วยกติกาชุดเดียวกับ backend จะได้เห็นข้อผิดทันที
       var check = Core.validateRegistration(payload, departments);

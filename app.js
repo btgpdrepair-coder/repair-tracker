@@ -903,6 +903,7 @@
         notiNo.inputMode = 'numeric';
         notiNo.autocomplete = 'off';
         notiNo.value = draft.notiNo || '';
+        limitNotiInput(notiNo, options.noti.digits);
         var sap = field(form, 'sapShortText', 'ชื่องาน SAP', input('text', ''));
         sap.maxLength = options.noti.sapMax;
         sap.value = draft.sapShortText || '';
@@ -979,6 +980,16 @@
       }
       return false;
     }
+  }
+
+  // ช่องเลข Noti รับเฉพาะตัวเลข และพิมพ์ได้ไม่เกินจำนวนหลักใน Config (NOTI_DIGITS) · วางเลขที่มีเว้นวรรคมาก็ตัดเว้นวรรคให้
+  // ต้องผูกก่อนตัวฟังค่าอื่นของช่อง จะได้เก็บค่าที่ตัดแล้ว
+  function limitNotiInput(control, digits) {
+    control.maxLength = digits;
+    control.addEventListener('input', function () {
+      var clean = control.value.replace(/\D/g, '').slice(0, digits);
+      if (clean !== control.value) control.value = clean;
+    });
   }
 
   // ใบงาน 27: "งานนี้กระทบอะไร" บังคับเลือก · 3 ด้านเลือกได้หลายข้อ · "ไม่กระทบ" เลือกเดี่ยว
@@ -1661,6 +1672,7 @@
     number.autocomplete = 'off';
     number.className = 'mono big-input';
     number.value = values.notiNo;
+    limitNotiInput(number, noti.digits);
     number.addEventListener('input', function () { values.notiNo = number.value; });
     var sap = field(form, 'sapShortText', 'ชื่องาน SAP (เติมให้แล้ว แก้ได้)', input('text', ''));
     sap.maxLength = noti.sapMax;

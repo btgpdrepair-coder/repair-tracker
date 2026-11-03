@@ -422,11 +422,13 @@ var Core = (function () {
   }
 
   // ผู้ใช้คนนี้ประเมินในฐานะ assessor (DEPT / SAFETY) ให้งานนี้ได้ไหม: หัวหน้าแผนกของงาน · จป · แอดมินแทนได้ทุกแบบ
+  // จป ประเมินแทนหัวหน้าแผนกสำหรับงานแผนกตัวเอง (SHE ไม่มีหัวหน้าแผนก · เจ้าของตัดสิน 4 พ.ย. 2026)
   function canAssess(user, assessor, job) {
     if (!user || !ASSESSOR[assessor]) return false;
     if (user.Role === 'ADMIN') return true;
     if (assessor === 'SAFETY') return user.Role === 'SAFETY';
-    return user.Role === 'DEPT_HEAD' && Boolean(job) && text(user.Department) === text(job.Department);
+    var sameDept = Boolean(job) && text(user.Department) === text(job.Department);
+    return (user.Role === 'DEPT_HEAD' || user.Role === 'SAFETY') && sameDept;
   }
 
   // หัวหน้ากะ (แผนกตัวเอง รวม จป) และหัวหน้าแผนกของงาน ติ๊กผลกระทบเพิ่มหรือเอาออกได้ · จป ติ๊กเพิ่มความปลอดภัยได้ทุกแผนก

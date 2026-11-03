@@ -117,7 +117,7 @@ button.small { min-height: 44px; padding: 0 16px; font-size: 15px; }
 /* ฟอร์ม */
 .field { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; }
 .field label:not(.choice), .field legend { font-size: 15px; font-weight: 700; padding: 0; }
-.field input[type="text"], .field input[type="tel"], .field select {
+.field input[type="text"], .field input[type="tel"], .field input[type="email"], .field select {
   min-height: 52px;
   border: 1px solid transparent;
   border-radius: 14px;
@@ -329,3 +329,45 @@ a.button-link.small { min-height: 44px; font-size: 15px; flex: 1; }
   color: var(--text); font: inherit; font-size: 15px; padding: 0 10px; min-width: 0;
 }
 .card-head button { flex-shrink: 0; white-space: nowrap; }
+
+/* ใบงาน 31: เลือกตำแหน่งและเครื่องจักร SAP */
+.sap-change input[type="text"] {
+  min-height: 52px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0 14px;
+  font: inherit;
+  background: var(--surface);
+  color: var(--text);
+}
+.pick-chosen { display: flex; flex-direction: column; gap: 4px; }
+.pick-chosen:empty { display: none; }
+.pick-list { display: flex; flex-direction: column; gap: 6px; }
+.pick-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border-radius: 14px;
+  text-align: left;
+  font-weight: 400;
+  background: var(--surface);
+}
+.pick-row small { flex-shrink: 0; }
+.pick-row[aria-pressed="true"] { border: 2px solid var(--primary); background: var(--field); font-weight: 600; }
+.crumb { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; font-size: 14px; color: var(--muted); }
+.crumb button.link { min-height: 36px; padding: 0 4px; font-size: 14px; }
+
+/* ใบงาน 31: ข้อมูลสำหรับ SAP ในหน้ากรอกเลข Noti */
+.sap-card h2 { font-size: 18px; margin: 0; }
+.sap-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sap-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sap-value { white-space: pre-line; overflow-wrap: anywhere; }
+.sap-tools { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.sap-unsure { display: flex; flex-direction: column; gap: 8px; background: var(--warn-bg); color: var(--warn-text); border-radius: 14px; padding: 12px 14px; font-size: 15px; }
+.sap-unsure-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sap-unsure-row button[aria-pressed="true"] { background: var(--ok-bg); color: var(--ok-text); border-color: var(--ok-bg); }
+.sap-change { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: var(--field); }
+.pick-row.stack { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }

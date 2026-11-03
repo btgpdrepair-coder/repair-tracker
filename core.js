@@ -75,6 +75,9 @@ var Core = (function () {
 
   var NAME_MAX = 100;
   var DEPARTMENT_MAX = 50;
+  var EMAIL_MAX = 100;
+  // ค่าในคอลัมน์ Email ของชีต Users เมื่อผู้ใช้ติ๊ก "ไม่มีอีเมล" (ว่าง = ยังไม่เคยถาม)
+  var NO_EMAIL = 'ไม่มี';
 
   // แปลงเวลาเป็นข้อความเวลาไทย เช่น 2026-10-28 08:00:00 (ไทยไม่มีเวลาออมแสง จึงบวก 7 ชั่วโมงได้ตรง ๆ)
   function formatTime(date) {
@@ -117,10 +120,19 @@ var Core = (function () {
 
     if (input.consent !== true) fields.consent = 'กรุณาติ๊กรับทราบข้อความแจ้งเรื่องข้อมูลก่อนส่ง';
 
+    // ใบงาน 31: อีเมลหรือติ๊ก "ไม่มีอีเมล" อย่างใดอย่างหนึ่ง · หน้าแอปรุ่นเก่าที่ไม่ส่งช่องนี้ยังลงทะเบียนได้ (อีเมลว่าง)
+    var email = '';
+    if (input.noEmail === true) email = NO_EMAIL;
+    else if (input.email !== undefined) {
+      email = String(input.email == null ? '' : input.email).trim();
+      if (!email) fields.email = 'กรุณากรอกอีเมล หรือติ๊ก "ไม่มีอีเมล"';
+      else if (email.length > EMAIL_MAX || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fields.email = 'รูปแบบอีเมลไม่ถูกต้อง';
+    }
+
     return {
       ok: Object.keys(fields).length === 0,
       fields: fields,
-      value: { realName: realName, department: department, phone: phone, requestedRole: input.requestedRole, canNoti: input.canNoti === true },
+      value: { realName: realName, department: department, phone: phone, requestedRole: input.requestedRole, canNoti: input.canNoti === true, email: email },
     };
   }
 
@@ -241,7 +253,7 @@ var Core = (function () {
   }
 
   // ชื่อพื้นที่ของงาน: "อื่น ๆ" ใช้ชื่อที่พิมพ์ ที่เหลือแปลงรหัสเป็นชื่อ (รวมพื้นที่ที่ปิดใช้แล้ว)
-  // areas คือรายการ { code, name } จากชีต Areas
+  // areas คือรายการ { code, name } จากชีต Areas และตำแหน่ง SAP (ใบงาน 31 งานใหม่เก็บรหัสตำแหน่งในช่องเดียวกัน)
   function jobAreaName(job, areas) {
     if (job.AreaCode === OTHER) return job.AreaOther || '';
     var area = (areas || []).filter(function (a) { return a.code === job.AreaCode; })[0];
@@ -277,7 +289,16 @@ var Core = (function () {
     else if (photos.length > PHOTO_MAX_COUNT) fields.photos = 'แนบรูปได้ไม่เกิน ' + PHOTO_MAX_COUNT + ' รูป';
     else if (!photos.every(isPhoto)) fields.photos = 'รูปไม่ถูกต้อง ลองถ่ายใหม่อีกครั้ง';
 
-    if (!asset) fields.asset = 'กรุณาบอกว่าอะไรเสีย';
+    // ใบงาน 31: เลือกเครื่องจักร = ชื่อเครื่องเป็น "อะไรเสีย" · "ไม่ใช่เครื่อง" หรือไม่ได้เลือก ต้องพิมพ์เอง
+    var equipmentId = text(input.equipmentId);
+    var machine = null;
+    if (equipmentId && equipmentId !== NOT_MACHINE) {
+      machine = (options.equipment || []).filter(function (e) { return e.id === equipmentId; })[0];
+      if (machine) asset = equipmentLabel(machine);
+      else fields.asset = 'ไม่พบเครื่องนี้ในรายการ เลือกใหม่หรือพิมพ์เอง';
+    }
+    if (equipmentId && equipmentId !== NOT_MACHINE && !machine) equipmentId = '';
+    else if (!asset) fields.asset = equipmentId === NOT_MACHINE ? 'กรุณาพิมพ์ว่าอะไรเสีย เช่น ประตูห้องคอนโทรล' : 'กรุณาบอกว่าอะไรเสีย';
     else if (asset.length > ASSET_MAX) fields.asset = 'ยาวเกิน ' + ASSET_MAX + ' ตัวอักษร';
 
     var symptom = (options.symptoms || []).filter(function (s) { return s.code === symptomCode; })[0];
@@ -293,7 +314,8 @@ var Core = (function () {
       symptomOther = '';
     }
 
-    var area = (options.areas || []).filter(function (a) { return a.code === areaCode; })[0];
+    // ใบงาน 31: ตำแหน่ง SAP ใช้ช่องเดียวกับพื้นที่ (options.locations) · พื้นที่ 6 แห่งเดิมยังรับอยู่ (หน้าแอปรุ่นเก่า)
+    var area = (options.areas || []).concat(options.locations || []).filter(function (a) { return a.code === areaCode; })[0];
     var areaName = '';
     if (areaCode === OTHER) {
       if (!areaOther) fields.area = 'กรุณาพิมพ์ชื่อพื้นที่';
@@ -327,6 +349,7 @@ var Core = (function () {
         symptomCode: symptomCode,
         symptomOther: symptomOther,
         areaCode: areaCode,
+        equipmentId: equipmentId,
         areaOther: areaOther,
         areaName: areaName,
         locationDetail: locationDetail,
@@ -522,6 +545,106 @@ var Core = (function () {
   function sapShortText(title, areaName, locationDetail, config) {
     var max = configNumber(config, 'SAP_SHORTTEXT_MAX', 40);
     var words = [title, areaName, locationDetail].map(text).join(' ').split(/\s+/).filter(Boolean);
+    var out = '';
+    for (var i = 0; i < words.length; i++) {
+      var next = out ? out + ' ' + words[i] : words[i];
+      if (next.length > max) break;
+      out = next;
+    }
+    return out || (words[0] || '').slice(0, max);
+  }
+
+  // ---------- ตำแหน่ง เครื่องจักร และรหัสชื่องาน SAP (ใบงาน 31) ----------
+
+  // ค่าในช่อง EquipmentID ของงาน: ผู้แจ้งบอกว่าไม่ใช่เครื่องจักร (อาคาร/สถานที่)
+  var NOT_MACHINE = 'NOT_MACHINE';
+
+  // ประเภทงานรั่ว (YY ของ LK) ตามตารางในมาตรฐานชื่องานของโรงงาน (ตัวอย่างในเอกสารที่ขัดกันไม่ใช้)
+  var LEAK_TYPES = { RW: 'วัตถุดิบ', FG: 'อาหาร', AR: 'อากาศ', LQ: 'วัตถุดิบเหลว', WT: 'น้ำ', ST: 'ไอน้ำ' };
+
+  // จุดที่ระบบเดารหัสไม่แน่ใจ หัวหน้ากะต้องแตะยืนยันก่อนคัดลอก (ตรวจระดับ 2)
+  var SAP_UNSURE = {
+    LEAK: 'งานรั่ว: เลือกว่ารั่วอะไร แล้วตรวจรหัส LK',
+    NOT_MACHINE: 'งานอาคาร/สถานที่: ตรวจรหัส LC.CM',
+    NO_EQUIPMENT: 'ผู้แจ้งไม่ได้เลือกเครื่องจากรายการ: ตรวจเครื่องและรหัส',
+    SYMPTOM_OTHER: 'อาการพิมพ์เอง: ตรวจชื่องานและรหัส',
+    NO_LOCATION: 'งานนี้ยังไม่มีตำแหน่ง SAP: เลือกตำแหน่ง',
+  };
+
+  // ตำแหน่งแม่ของรหัส SAP เช่น X001-PD01-F02-PL1 → X001-PD01-F02 · ห้องใต้ "ตัวแม่" (-XXX-AC01) ข้าม XXX ไปที่ชั้น
+  // พื้นที่ชั้นบนสุด (X001-PD01) ไม่มีแม่ คืน ''
+  function locationParent(code) {
+    var parts = text(code).split('-');
+    parts.pop();
+    if (parts[parts.length - 1] === 'XXX') parts.pop();
+    return parts.length > 1 ? parts.join('-') : '';
+  }
+
+  // ตำแหน่งลูกที่เลือกต่อได้ (ไม่แสดง "ตัวแม่" แต่แสดงห้องข้างใต้แทน) · code ว่าง = พื้นที่ชั้นบนสุด
+  function locationChildren(locations, code) {
+    code = text(code);
+    return (locations || []).filter(function (l) {
+      return l.code !== code && locationParent(l.code) === code && !/-XXX$/.test(l.code);
+    });
+  }
+
+  // เครื่องจักรที่ตำแหน่งนี้และตำแหน่งย่อยทั้งหมด
+  function equipmentAt(equipment, code) {
+    code = text(code);
+    if (!code) return [];
+    return (equipment || []).filter(function (e) { return e.location === code || e.location.indexOf(code + '-') === 0; });
+  }
+
+  // ชื่อเครื่องที่แสดง: ชื่อเรียกภาษาไทยก่อน ไม่มีใช้ชื่อ SAP (ตัด "A+_" ที่นำหน้าชื่อเครื่องหลักออก)
+  function equipmentLabel(machine) {
+    return text(machine.localName) || text(machine.name).replace(/^A\+_/, '');
+  }
+
+  // ร่างข้อมูล Noti จากงาน ให้หัวหน้ากะตรวจแล้วคัดลอกไป SAP
+  // opts: { impacts (รหัสผลกระทบ ไม่รวม NONE), reporterRole, leakType, locationCode, equipmentId, config }
+  //   locationCode/equipmentId ส่งมาเมื่อหัวหน้ากะเปลี่ยน ไม่ส่งใช้ของงาน
+  function sapDraft(job, opts) {
+    opts = opts || {};
+    var config = opts.config || {};
+    var max = configNumber(config, 'SAP_SHORTTEXT_MAX', 40);
+    var impacts = (opts.impacts || []).filter(function (c) { return IMPACT[c]; });
+    var equipmentId = text(opts.equipmentId !== undefined ? opts.equipmentId : job.EquipmentID);
+    var leak = text(job.SymptomCode) === 'LEAK';
+    var notMachine = equipmentId === NOT_MACHINE;
+    var leakType = LEAK_TYPES[opts.leakType] ? opts.leakType : '';
+    var staff = opts.reporterRole === 'STAFF';
+    var xx = leak ? 'LK' : notMachine ? 'LC' : 'MC';
+    var yy = leak ? leakType || '??' : notMachine ? 'CM' : (impacts.indexOf('PRODUCTION') >= 0 ? 'PF' : 'MF');
+    var zz = text(config[staff ? 'SAP_ZZ_STAFF' : 'SAP_ZZ_OTHER']) || (staff ? 'AM' : 'MG');
+    var unsure = [];
+    if (leak) unsure.push('LEAK');
+    else if (notMachine) unsure.push('NOT_MACHINE');
+    else if (!equipmentId) unsure.push('NO_EQUIPMENT');
+    if (text(job.SymptomCode) === OTHER) unsure.push('SYMPTOM_OTHER');
+    var location = text(opts.locationCode !== undefined ? opts.locationCode : job.AreaCode);
+    if (!/^[A-Z0-9]+-[A-Z0-9]/.test(location)) {
+      location = '';
+      unsure.push('NO_LOCATION');
+    }
+    var code = xx + '.' + yy + '.' + zz + '.';
+    return {
+      code: code,
+      notiType: leak ? (impacts.indexOf('SAFETY') >= 0 ? 'AY' : 'AR') : notMachine ? 'AR' : 'BM',
+      priority: impacts.length ? 'High' : 'Medium',
+      shortText: code + trimWords(job.Title, max - code.length),
+      location: location,
+      equipmentId: notMachine ? '' : equipmentId,
+      description: [text(job.Detail), text(job.LocationDetail) ? 'ตรงไหน: ' + text(job.LocationDetail) : '', 'จากระบบแจ้งซ่อม ' + job.JobID]
+        .filter(Boolean).join(' · '),
+      leak: leak,
+      leakType: leakType,
+      unsure: unsure,
+    };
+  }
+
+  // ตัดข้อความทีละคำให้ไม่เกิน max ตัว (ไม่ตัดกลางคำ สระและวรรณยุกต์ไทยไม่ขาด) คำแรกยาวเกินค่อยตัดตามจำนวนตัวอักษร
+  function trimWords(value, max) {
+    var words = text(value).split(/\s+/).filter(Boolean);
     var out = '';
     for (var i = 0; i < words.length; i++) {
       var next = out ? out + ' ' + words[i] : words[i];
@@ -790,6 +913,15 @@ var Core = (function () {
     validateNoti: validateNoti,
     duplicateNoti: duplicateNoti,
     sapShortText: sapShortText,
+    NOT_MACHINE: NOT_MACHINE,
+    LEAK_TYPES: LEAK_TYPES,
+    SAP_UNSURE: SAP_UNSURE,
+    NO_EMAIL: NO_EMAIL,
+    locationParent: locationParent,
+    locationChildren: locationChildren,
+    equipmentAt: equipmentAt,
+    equipmentLabel: equipmentLabel,
+    sapDraft: sapDraft,
     formatNoti: formatNoti,
     NOTE_MAX: NOTE_MAX,
     validateAfterRepair: validateAfterRepair,

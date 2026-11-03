@@ -161,6 +161,21 @@
     phone.maxLength = 12;
     form.querySelector('[data-field="phone"]').appendChild(el('small', 'muted', 'หัวหน้ากะและช่างใช้โทรถามอาการ คนอื่นไม่เห็นเบอร์นี้'));
 
+    // ใบงาน 31: อีเมล หรือติ๊ก "ไม่มีอีเมล" (ติ๊กแล้วช่องอีเมลปิด) เก็บไว้ใช้ตอนเปิด Noti ใน SAP ภายหลัง
+    var email = field(form, 'email', 'อีเมล', input('email', 'name@example.com'));
+    email.autocomplete = 'email';
+    var emailBox = form.querySelector('[data-field="email"]');
+    var noEmailLabel = el('label', 'choice');
+    var noEmail = document.createElement('input');
+    noEmail.type = 'checkbox';
+    noEmailLabel.appendChild(noEmail);
+    noEmailLabel.appendChild(el('span', '', 'ไม่มีอีเมล'));
+    emailBox.insertBefore(noEmailLabel, emailBox.querySelector('.field-error'));
+    noEmail.addEventListener('change', function () {
+      email.disabled = noEmail.checked;
+      if (noEmail.checked) email.value = '';
+    });
+
     // โรลที่ขอเป็นดรอปดาวน์ (เจ้าของขอ 31 ต.ค. 2026 · หน้าสั้นลง) คำอธิบายของโรลที่เลือกขึ้นใต้ช่อง
     var roleSelect = document.createElement('select');
     var roleEmpty = el('option', '', 'เลือกโรล');
@@ -219,6 +234,8 @@
         requestedRole: roleSelect.value,
         consent: consent.checked,
         canNoti: roleSelect.value === 'STAFF' && canNoti.checked,
+        email: email.value,
+        noEmail: noEmail.checked,
       };
       // ตรวจในเครื่องก่อนด้วยกติกาชุดเดียวกับ backend จะได้เห็นข้อผิดทันที
       var check = Core.validateRegistration(payload, departments);
@@ -481,6 +498,8 @@
 
   // ช่องของแต่ละขั้น ใช้เลือกข้อความผิดจาก Core.validateJob มาแสดงเฉพาะขั้นที่อยู่
   var STEP_FIELDS = { 1: ['photos'], 2: ['asset', 'symptom'], 3: ['area', 'locationDetail'], 4: ['impacts', 'detail', 'notiNo', 'sapShortText'] };
+  // ใบงาน 31: เลือกตำแหน่งก่อนเครื่อง
+  var SAP_STEP_FIELDS = { 1: ['photos'], 2: ['area', 'locationDetail'], 3: ['asset', 'symptom'], 4: ['impacts', 'detail', 'notiNo', 'sapShortText'] };
   var MIC_HINT = 'กดไมค์บนแป้นพิมพ์เพื่อพูดแทนพิมพ์ได้';
 
   // แบบร่างเก็บในเครื่อง (รวมรูป) ปิดแอปกลางคันแล้วเปิดใหม่ยังอยู่ · ที่เก็บเต็มหรือถูกปิดก็ใช้ต่อได้แค่ไม่มีแบบร่าง
@@ -609,6 +628,216 @@
       row.appendChild(chip);
     });
     body.appendChild(row);
+  }
+
+  // ---------- ตำแหน่งและเครื่องจักร SAP (ใบงาน 31) ----------
+
+  // รายการแบบกะทัดรัดจาก backend → { locations: [{ code, name }], equipment: [{ id, name, location, localName }] }
+  function readCatalog(raw) {
+    if (!raw || !raw.locations || !raw.locations.length) return null;
+    return {
+      locations: raw.locations.map(function (l) { return { code: l[0], name: l[1] }; }),
+      equipment: raw.equipment.map(function (e) { return { id: e[0], name: e[1], location: e[2], localName: e[3] || '' }; }),
+    };
+  }
+
+  function locationName(cat, code) {
+    var found = cat.locations.filter(function (l) { return l.code === code; })[0];
+    return found ? found.name : code;
+  }
+
+  // ชื่อสั้นในรายการไล่ชั้น: ตัดชื่อตำแหน่งแม่ที่ซ้ำข้างหน้า เช่น "อาคารผลิตชั้น 2 โซนอัดเม็ด 1,2" ใต้ "อาคารผลิตชั้น 2" → "โซนอัดเม็ด 1,2"
+  function locationShort(cat, code) {
+    var name = locationName(cat, code);
+    var parent = Core.locationParent(code);
+    if (!parent) return name;
+    var parentName = locationName(cat, parent);
+    var cuts = [parentName, parentName.replace(/^พื้นที่/, '')];
+    for (var i = 0; i < cuts.length; i++) {
+      if (cuts[i] && name.indexOf(cuts[i]) === 0 && name.length > cuts[i].length) return name.slice(cuts[i].length).trim();
+    }
+    return name;
+  }
+
+  // เลือกตำแหน่ง: ที่แผนกแจ้งบ่อย · ค้นหา · ไล่ทีละชั้น (พื้นที่ › ชั้น › โซน/ห้อง)
+  // state.areaCode = ตำแหน่งที่เลือก · state.browse = ชั้นที่กำลังดู · opts.frequent = รหัสที่แจ้งบ่อย · opts.onChange หลังเลือก
+  function locationPicker(body, cat, state, opts) {
+    var chosen = el('div', 'pick-chosen');
+    var frequent = el('div', 'chips');
+    var search = input('text', 'ค้นหา เช่น บรรจุ บอยเลอร์ ไซโล');
+    var list = el('div', 'pick-list');
+    var counts = {};
+    cat.equipment.forEach(function (e) { var top = e.location.split('-').slice(0, 2).join('-'); counts[top] = (counts[top] || 0) + 1; });
+    body.appendChild(chosen);
+    if ((opts.frequent || []).length) {
+      body.appendChild(el('small', 'muted', 'ที่แผนกคุณแจ้งบ่อย'));
+      body.appendChild(frequent);
+    }
+    body.appendChild(search);
+    body.appendChild(list);
+    search.addEventListener('input', drawList);
+
+    function choose(code) {
+      state.areaCode = code;
+      state.areaOther = '';
+      state.browse = Core.locationChildren(cat.locations, code).length ? code : Core.locationParent(code);
+      search.value = '';
+      if (opts.onChange) opts.onChange();
+      draw();
+    }
+
+    function pickRow(code, text, extra) {
+      var row = el('button', 'pick-row');
+      row.type = 'button';
+      row.setAttribute('aria-pressed', String(code === state.areaCode));
+      row.appendChild(el('span', '', text));
+      if (extra) row.appendChild(el('small', 'muted', extra));
+      row.addEventListener('click', function () { choose(code); });
+      return row;
+    }
+
+    function drawList() {
+      list.innerHTML = '';
+      var typed = search.value.trim().toLowerCase();
+      if (typed) {
+        var hits = cat.locations.filter(function (l) {
+          return !/-XXX$/.test(l.code) && (l.name.toLowerCase().indexOf(typed) >= 0 || l.code.toLowerCase().indexOf(typed) >= 0);
+        }).slice(0, 8);
+        hits.forEach(function (l) { list.appendChild(pickRow(l.code, l.name)); });
+        if (!hits.length) list.appendChild(el('small', 'muted', 'ไม่เจอ ลองคำอื่น'));
+        return;
+      }
+      var crumb = el('div', 'crumb');
+      var path = [];
+      for (var c = state.browse; c; c = Core.locationParent(c)) path.unshift(c);
+      [''].concat(path).forEach(function (code, i) {
+        if (i) crumb.appendChild(document.createTextNode(' › '));
+        var link = el('button', 'link', code ? locationShort(cat, code) : 'ทั้งโรงงาน');
+        link.type = 'button';
+        link.addEventListener('click', function () { state.browse = code; drawList(); });
+        crumb.appendChild(link);
+      });
+      list.appendChild(crumb);
+      var kids = Core.locationChildren(cat.locations, state.browse || '');
+      if (!state.browse) kids.sort(function (a, b) { return (counts[b.code] || 0) - (counts[a.code] || 0); });
+      kids.forEach(function (l) {
+        var n = Core.locationChildren(cat.locations, l.code).length;
+        list.appendChild(pickRow(l.code, locationShort(cat, l.code), n ? n + ' ที่ย่อย ›' : ''));
+      });
+    }
+
+    function draw() {
+      chosen.innerHTML = '';
+      if (state.areaCode) {
+        chosen.appendChild(el('p', 'notice', 'เลือกแล้ว: ' + locationName(cat, state.areaCode)));
+        if (Core.locationChildren(cat.locations, state.areaCode).length) {
+          chosen.appendChild(el('small', 'muted', 'เลือกให้ละเอียดขึ้นได้ หรือกดถัดไปถ้าไม่แน่ใจโซน'));
+        }
+      }
+      frequent.innerHTML = '';
+      (opts.frequent || []).forEach(function (code) {
+        var chip = el('button', 'chip', locationName(cat, code));
+        chip.type = 'button';
+        chip.setAttribute('aria-pressed', String(code === state.areaCode));
+        chip.addEventListener('click', function () { choose(code); });
+        frequent.appendChild(chip);
+      });
+      drawList();
+    }
+    draw();
+  }
+
+  // เลือกเครื่องในตำแหน่งที่เลือก (รวมตำแหน่งย่อย) · ค้นหาในที่นี้ก่อน ไม่เจอค้นทั้งโรงงาน
+  // state.equipmentId = รหัสเครื่อง / Core.NOT_MACHINE / '' · state.assetTyping = พิมพ์เอง · state.asset = ชื่อที่แสดงหรือที่พิมพ์
+  // opts.onChange หลังเปลี่ยน · opts.typing = มีช่องพิมพ์เอง (หน้าแจ้งงาน) ไม่มี = หัวหน้ากะเลือกเครื่องตอนเปิด Noti
+  function equipmentPicker(body, cat, state, opts) {
+    var here = Core.equipmentAt(cat.equipment, state.areaCode);
+    body.appendChild(el('small', 'muted', here.length
+      ? 'ระบบแนะนำเครื่องในที่นี้ ' + here.length + ' เครื่อง แตะเลือก หรือพิมพ์ค้นหา'
+      : 'ที่นี้ไม่มีเครื่องในรายการ SAP พิมพ์ค้นหา หรือเลือกด้านล่าง'));
+    var search = input('text', 'ค้นหา เช่น อัดเม็ด สกรู ปั๊ม');
+    var list = el('div', 'pick-list');
+    var modes = el('div', 'chips');
+    var typedBox = el('div', 'field-body');
+    body.appendChild(search);
+    body.appendChild(list);
+    body.appendChild(modes);
+    body.appendChild(typedBox);
+    search.addEventListener('input', drawList);
+
+    function set(id, typing) {
+      state.equipmentId = id;
+      state.assetTyping = Boolean(typing);
+      var machine = cat.equipment.filter(function (e) { return e.id === id; })[0];
+      if (machine) state.asset = Core.equipmentLabel(machine);
+      else if (!typing && id !== Core.NOT_MACHINE) state.asset = '';
+      if (opts.onChange) opts.onChange();
+      draw();
+    }
+
+    function match(e, typed) {
+      return (Core.equipmentLabel(e) + ' ' + e.name + ' ' + e.id).toLowerCase().indexOf(typed) >= 0;
+    }
+
+    function drawList() {
+      list.innerHTML = '';
+      var typed = search.value.trim().toLowerCase();
+      var pool = here.filter(function (e) { return !typed || match(e, typed); });
+      var elsewhere = false;
+      if (typed && !pool.length) {
+        pool = cat.equipment.filter(function (e) { return match(e, typed); });
+        elsewhere = true;
+      }
+      var chosen = cat.equipment.filter(function (e) { return e.id === state.equipmentId; })[0];
+      if (chosen && pool.indexOf(chosen) < 0 && !typed) pool = [chosen].concat(pool);
+      pool.slice(0, 7).forEach(function (e) {
+        var row = el('button', 'pick-row stack');
+        row.type = 'button';
+        row.setAttribute('aria-pressed', String(e.id === state.equipmentId));
+        row.appendChild(el('span', '', Core.equipmentLabel(e)));
+        var sub = [e.localName ? 'SAP: ' + e.name : '', elsewhere || e.location.indexOf(state.areaCode) !== 0 ? locationName(cat, e.location) : '']
+          .filter(Boolean).join(' · ');
+        if (sub) row.appendChild(el('small', 'muted', sub));
+        row.addEventListener('click', function () { set(e.id); });
+        list.appendChild(row);
+      });
+      if (pool.length > 7) list.appendChild(el('small', 'muted', 'มีอีก ' + (pool.length - 7) + ' เครื่อง พิมพ์ค้นหาให้แคบลง'));
+      if (typed && !pool.length) list.appendChild(el('small', 'muted', opts.typing ? 'ไม่เจอ ลองคำอื่น หรือกด "ไม่เจอ พิมพ์เอง"' : 'ไม่เจอ ลองคำอื่น'));
+    }
+
+    function modeChip(label, pressed, onClick) {
+      var chip = el('button', 'chip', label);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(pressed));
+      chip.addEventListener('click', onClick);
+      modes.appendChild(chip);
+    }
+
+    function draw() {
+      modes.innerHTML = '';
+      typedBox.innerHTML = '';
+      var notMachine = state.equipmentId === Core.NOT_MACHINE;
+      modeChip('ไม่ใช่เครื่อง (อาคาร/สถานที่)', notMachine, function () { set(Core.NOT_MACHINE, opts.typing); });
+      if (opts.typing) {
+        modeChip('ไม่เจอ พิมพ์เอง', !state.equipmentId && state.assetTyping, function () { set('', true); });
+        if (state.assetTyping) {
+          var typed = input('text', notMachine ? 'เช่น ประตูห้องคอนโทรล' : 'ชื่อสิ่งที่เสีย เช่น ปั๊มน้ำ');
+          typed.id = 'f-asset';
+          typed.value = state.asset || '';
+          typed.addEventListener('input', function () {
+            state.asset = typed.value;
+            if (opts.onChange) opts.onChange();
+          });
+          typedBox.appendChild(typed);
+          typedBox.appendChild(el('small', 'hint', MIC_HINT));
+          if (opts.suggestions) suggestions(typed, opts.suggestions);
+        }
+      } else {
+        modeChip('ไม่ระบุเครื่อง', !state.equipmentId, function () { set(''); });
+      }
+      drawList();
+    }
+    draw();
   }
 
   // ช่องรูป 1–3 รูป ใช้ทั้งแจ้งงาน แก้เสร็จหน้างาน และแนบรูปหลังซ่อม
@@ -788,15 +1017,24 @@
     api('reportOptions')
       .then(function (res) {
         if (!res.ok) return showError(res.error.message);
+        // ใบงาน 31: มีตำแหน่ง SAP แล้ว เลือกตำแหน่งและเครื่องแทนพื้นที่ 6 แห่งเดิม (ยังไม่วางข้อมูล = แบบเดิม)
+        res.data.sap = readCatalog(res.data.catalog);
+        if (res.data.sap) {
+          res.data.locations = res.data.sap.locations;
+          res.data.equipment = res.data.sap.equipment;
+          res.data.areas = [];
+        }
         var draft = loadDraft(me);
         if (!draft || !draft.clientRequestId) {
           draft = {
             clientRequestId: newRequestId(),
             photos: [],
-            areaCode: res.data.lastAreaCode || '',
-            areaOther: res.data.lastAreaOther || '',
+            areaCode: res.data.sap ? '' : res.data.lastAreaCode || '',
+            areaOther: res.data.sap ? '' : res.data.lastAreaOther || '',
           };
         }
+        // แบบร่างก่อนมีตำแหน่ง SAP ที่พิมพ์ "อะไรเสีย" ไว้แล้ว แสดงเป็นพิมพ์เอง
+        if (res.data.sap && draft.asset && !draft.equipmentId) draft.assetTyping = true;
         // ใบงาน 27: ผลกระทบบังคับเลือก (แบบร่างเก่าที่ยังไม่มีช่องนี้เริ่มที่ยังไม่เลือก)
         if (!Array.isArray(draft.impacts)) draft.impacts = [];
         showReportStep(me, res.data, draft, draft.step || 1);
@@ -805,6 +1043,11 @@
   }
 
   function showReportStep(me, options, draft, step) {
+    var sapMode = Boolean(options.sap);
+    // ใบงาน 31: เลือกตำแหน่งก่อน แล้วระบบแนะนำเครื่องในตำแหน่งนั้น (สลับขั้น 2 กับ 3)
+    var whereStep = sapMode ? 2 : 3;
+    var whatStep = sapMode ? 3 : 2;
+    var stepFields = sapMode ? SAP_STEP_FIELDS : STEP_FIELDS;
     draft.step = step;
     saveDraft(me, draft);
     var main = screen('แจ้งงานใหม่');
@@ -841,15 +1084,24 @@
       buildInfo = el('p', 'build-info', 'กล้องในแอป: ' + inAppCamera);
     }
 
-    if (step === 2) {
+    if (step === whatStep) {
       form.appendChild(el('h1', '', 'อะไรเสีย เกิดอะไรขึ้น'));
       var title = el('p', 'notice');
       var showTitle = function () {
         var value = check().value.title;
         title.textContent = 'ชื่องาน: ' + (value || '-');
       };
-      var asset = textField(form, persist, draft, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
-      suggestions(asset, options.assetSuggestions || []);
+      if (sapMode) {
+        form.appendChild(el('p', 'muted', 'ที่: ' + locationName(options.sap, draft.areaCode)));
+        equipmentPicker(group(form, 'asset', 'อะไรเสีย *'), options.sap, draft, {
+          typing: true,
+          suggestions: options.assetSuggestions || [],
+          onChange: function () { persist(); showTitle(); },
+        });
+      } else {
+        var asset = textField(form, persist, draft, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
+        suggestions(asset, options.assetSuggestions || []);
+      }
       var symptoms = group(form, 'symptom', 'เกิดอะไรขึ้น *');
       chips(symptoms, options.symptoms.map(function (s) { return { code: s.code, text: s.label }; }), draft.symptomCode,
         function (code) { draft.symptomCode = code; rerender(); });
@@ -860,13 +1112,28 @@
       showTitle();
     }
 
-    if (step === 3) {
+    if (step === whereStep) {
       form.appendChild(el('h1', '', 'อยู่ที่ไหน'));
-      var areas = group(form, 'area', 'พื้นที่ *');
-      chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), draft.areaCode,
-        function (code) { draft.areaCode = code; rerender(); });
-      if (draft.areaCode === Core.OTHER) {
-        textField(form, persist, draft, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+      if (sapMode) {
+        locationPicker(group(form, 'area', 'ตำแหน่ง *'), options.sap, draft, {
+          frequent: options.frequentLocations || [],
+          onChange: function () {
+            // ย้ายตำแหน่งแล้วเครื่องที่เลือกไว้ไม่อยู่ในที่ใหม่ ล้างเครื่องออก
+            var still = Core.equipmentAt(options.sap.equipment, draft.areaCode).some(function (e) { return e.id === draft.equipmentId; });
+            if (draft.equipmentId && draft.equipmentId !== Core.NOT_MACHINE && !still) {
+              draft.equipmentId = '';
+              draft.asset = '';
+            }
+            persist();
+          },
+        });
+      } else {
+        var areas = group(form, 'area', 'พื้นที่ *');
+        chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), draft.areaCode,
+          function (code) { draft.areaCode = code; rerender(); });
+        if (draft.areaCode === Core.OTHER) {
+          textField(form, persist, draft, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+        }
       }
       var spot = textField(form, persist, draft, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
       suggestions(spot, (options.locationSuggestions || {})[draft.areaCode] || []);
@@ -883,9 +1150,9 @@
         strip.appendChild(img);
       });
       form.appendChild(summary('รูป', strip, 1));
-      form.appendChild(summary('ชื่องาน', el('span', '', value.title), 2));
-      form.appendChild(summary('พื้นที่', el('span', '', value.areaName), 3));
-      form.appendChild(summary('ตรงไหน', el('span', '', value.locationDetail), 3));
+      form.appendChild(summary('ชื่องาน', el('span', '', value.title), whatStep));
+      form.appendChild(summary(sapMode ? 'ตำแหน่ง' : 'พื้นที่', el('span', '', value.areaName), whereStep));
+      form.appendChild(summary('ตรงไหน', el('span', '', value.locationDetail), whereStep));
       if (options.noti) {
         form.appendChild(el('p', 'notice', 'แจ้งแทนคนอื่น: ใส่ชื่อและเบอร์ของคนแจ้งจริงในรายละเอียด · ถ้าเปิด Noti ใน SAP แล้ว ใส่เลข Noti ด้านล่าง งานจะเข้าคิวรอซ่อมทันที'));
       }
@@ -907,7 +1174,11 @@
           draft.notiNo = notiNo.value;
           var has = Boolean(notiNo.value.trim());
           if (has && !draft.sapShortText) {
-            draft.sapShortText = Core.sapShortText(value.title, value.areaName, value.locationDetail, { SAP_SHORTTEXT_MAX: options.noti.sapMax });
+            draft.sapShortText = sapMode
+              // ใบงาน 31: ชื่องาน SAP พร้อมรหัส XX.YY.ZZ. (งานรั่วยังไม่รู้ประเภท ได้ ?? ให้แก้เอง)
+              ? Core.sapDraft({ Title: value.title, SymptomCode: draft.symptomCode, EquipmentID: draft.equipmentId, AreaCode: draft.areaCode },
+                { impacts: draft.impacts, reporterRole: me.role, config: { SAP_SHORTTEXT_MAX: options.noti.sapMax } }).shortText
+              : Core.sapShortText(value.title, value.areaName, value.locationDetail, { SAP_SHORTTEXT_MAX: options.noti.sapMax });
             sap.value = draft.sapShortText;
           }
           sapBox.classList.toggle('hidden', !has);
@@ -936,7 +1207,7 @@
       event.preventDefault();
       var result = check();
       if (step < 4) {
-        var fields = pickFields(result.fields, STEP_FIELDS[step]);
+        var fields = pickFields(result.fields, stepFields[step]);
         showFieldErrors(form, fields);
         if (Object.keys(fields).length) return;
         showReportStep(me, options, draft, step + 1);
@@ -965,7 +1236,7 @@
 
     function goToFirstError(fields) {
       for (var s = 1; s <= 4; s++) {
-        var found = pickFields(fields, STEP_FIELDS[s]);
+        var found = pickFields(fields, stepFields[s]);
         if (Object.keys(found).length) {
           showReportStep(me, options, draft, s);
           showFieldErrors(document.querySelector('form'), found);
@@ -1046,6 +1317,8 @@
       symptomCode: draft.symptomCode,
       symptomOther: draft.symptomOther,
       areaCode: draft.areaCode,
+      // ใบงาน 31: รหัสเครื่องหรือ NOT_MACHINE (ไม่ส่งตอนยังไม่มีตำแหน่ง SAP)
+      equipmentId: options.sap ? draft.equipmentId || '' : undefined,
       areaOther: draft.areaOther,
       locationDetail: draft.locationDetail,
       detail: draft.detail,
@@ -1397,7 +1670,9 @@
     head.appendChild(el('small', 'muted', job.jobId));
     card.appendChild(head);
     card.appendChild(el('h1', '', job.title));
-    card.appendChild(row('พื้นที่', el('span', '', [job.areaName, job.locationDetail].filter(Boolean).join(' · '))));
+    // ใบงาน 31: งานใหม่เก็บรหัสตำแหน่ง SAP (มีขีด เช่น X001-PD01) งานเก่าเป็นพื้นที่ 6 แห่งเดิม
+    var sapPlace = /-/.test(job.areaCode || '');
+    card.appendChild(row(sapPlace ? 'ตำแหน่ง' : 'พื้นที่', el('span', '', [job.areaName, job.locationDetail].filter(Boolean).join(' · '))));
     card.appendChild(row('อาการ', el('span', '', job.symptom)));
     card.appendChild(row('แจ้งโดย', el('span', '', [data.reporter.name, data.reporter.department].filter(Boolean).join(' · '))));
     card.appendChild(row('แจ้งเมื่อ', el('span', '', shortTime(job.createdAt) + ' · แจ้งมา ' + Core.ageText(job.createdAt, data.now))));
@@ -1548,6 +1823,11 @@
         if (!res.ok) return showError(res.error.message);
         var job = data.job;
         var options = res.data;
+        options.sap = readCatalog(options.catalog);
+        if (options.sap) {
+          options.locations = options.sap.locations;
+          options.equipment = options.sap.equipment;
+        }
         // พื้นที่และอาการเดิมที่ปิดใช้ไปแล้วต้องมีปุ่มให้เลือกค้างไว้ (backend ยอมรับค่าเดิมของงาน)
         var hasArea = options.areas.some(function (a) { return a.code === job.areaCode; });
         if (job.areaCode && job.areaCode !== Core.OTHER && !hasArea) options.areas = options.areas.concat([{ code: job.areaCode, name: job.areaName }]);
@@ -1557,6 +1837,11 @@
           asset: job.asset, symptomCode: job.symptomCode, symptomOther: job.symptomOther,
           areaCode: job.areaCode, areaOther: job.areaOther, locationDetail: job.locationDetail, detail: job.detail,
         };
+        if (options.sap) {
+          state.equipmentId = job.equipmentId;
+          state.assetTyping = !job.equipmentId || job.equipmentId === Core.NOT_MACHINE;
+          state.browse = Core.locationParent(job.areaCode);
+        }
         renderEditJob(me, data, options, state, nav);
       })
       .catch(function () { showError('โหลดหน้าแก้ไขไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
@@ -1580,8 +1865,25 @@
     form.appendChild(el('p', 'muted', 'แก้รูปไม่ได้ ถ้ารูปผิด ให้หัวหน้ากะยกเลิกงาน (แจ้งผิด) แล้วแจ้งใหม่'));
     var title = el('p', 'notice');
     var showTitle = function () { title.textContent = 'ชื่องาน: ' + (check().value.title || '-'); };
-    var asset = textField(form, nothing, state, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
-    suggestions(asset, options.assetSuggestions || []);
+    if (options.sap) {
+      locationPicker(group(form, 'area', 'ตำแหน่ง *'), options.sap, state, {
+        onChange: function () {
+          var still = Core.equipmentAt(options.sap.equipment, state.areaCode).some(function (e) { return e.id === state.equipmentId; });
+          if (state.equipmentId && state.equipmentId !== Core.NOT_MACHINE && !still) {
+            state.equipmentId = '';
+            state.asset = '';
+          }
+          rerender();
+        },
+      });
+    } else {
+      var asset = textField(form, nothing, state, 'asset', 'asset', 'อะไรเสีย', 'เช่น ปั๊มน้ำ สายพาน', showTitle);
+      suggestions(asset, options.assetSuggestions || []);
+    }
+    if (options.sap) {
+      equipmentPicker(group(form, 'asset', 'อะไรเสีย *'), options.sap, state,
+        { typing: true, suggestions: options.assetSuggestions || [], onChange: showTitle });
+    }
     var symptoms = group(form, 'symptom', 'เกิดอะไรขึ้น *');
     chips(symptoms, options.symptoms.map(function (x) { return { code: x.code, text: x.label }; }), state.symptomCode,
       function (code) { state.symptomCode = code; rerender(); });
@@ -1590,10 +1892,12 @@
     }
     form.appendChild(title);
     showTitle();
-    var areas = group(form, 'area', 'พื้นที่ *');
-    chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), state.areaCode,
-      function (code) { state.areaCode = code; rerender(); });
-    if (state.areaCode === Core.OTHER) textField(form, nothing, state, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+    if (!options.sap) {
+      var areas = group(form, 'area', 'พื้นที่ *');
+      chips(areas, options.areas.map(function (a) { return { code: a.code, text: a.name }; }), state.areaCode,
+        function (code) { state.areaCode = code; rerender(); });
+      if (state.areaCode === Core.OTHER) textField(form, nothing, state, 'areaOther', 'areaOther', 'พิมพ์ชื่อพื้นที่', 'เช่น โรงซ่อมบำรุง');
+    }
     var spot = textField(form, nothing, state, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
     suggestions(spot, (options.locationSuggestions || {})[state.areaCode] || []);
     textArea(form, 'detail', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)', 'เช่น เริ่มรั่วตั้งแต่เช้า', state.detail, function (text) { state.detail = text; });
@@ -1613,7 +1917,7 @@
       save.disabled = true;
       save.textContent = 'กำลังบันทึก…';
       formError.classList.add('hidden');
-      api('editJob', Object.assign({ jobId: job.jobId }, state))
+      api('editJob', Object.assign({ jobId: job.jobId }, state, { equipmentId: options.sap ? state.equipmentId || '' : undefined }))
         .then(function (res) {
           if (res.ok) return nav.go(res.data.changed ? 'บันทึกการแก้ไขแล้ว' : 'ไม่มีอะไรเปลี่ยน');
           if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
@@ -1647,17 +1951,43 @@
       .catch(function () { showError('โหลดงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
   }
 
-  // values = { notiNo, sapShortText } ค่าที่กรอกไว้ (กลับมาแก้จากหน้ายืนยันแล้วไม่หาย)
+  // values = { notiNo, sapShortText, sap } ค่าที่กรอกไว้ (กลับมาแก้จากหน้ายืนยันแล้วไม่หาย)
+  // values.sap (ใบงาน 31) = สิ่งที่หัวหน้ากะเปลี่ยนในข้อมูล SAP { location, equipmentId, leakType, checked, edited }
   function showNotiForm(me, data, nav, notice, values, fields) {
     var job = data.job;
     var noti = data.noti;
-    values = values || { notiNo: '', sapShortText: noti.sapDefault };
+    if (!values) {
+      values = { notiNo: '', sapShortText: noti.sapDefault };
+      if (noti.sap) {
+        values.sap = { location: noti.sap.draft.location, equipmentId: noti.sap.input.job.EquipmentID, leakType: '', checked: {}, edited: false };
+        values.sapShortText = noti.sap.draft.shortText;
+      }
+    }
     var main = screen('กรอกเลข Noti');
     backButton(main, nav);
     if (notice) main.appendChild(el('p', 'success', notice));
     // ปุ่มแก้เสร็จหน้างานและยกเลิกจากหน้านี้ ทำเสร็จแล้วไปงานถัดไปในคิว
     var self = { label: '‹ กรอกเลข Noti', queue: 'noti', go: function (n) { showNotiForm(me, data, nav, n, values); } };
     main.appendChild(jobSummary(me, data, self));
+    var sapInput = null;
+    var sapBox = null;
+    if (noti.sap) {
+      sapBox = el('div');
+      main.appendChild(sapBox);
+      var drawSap = function () {
+        sapBox.innerHTML = '';
+        sapBox.appendChild(sapCard(noti, values, function () {
+          // ระบบตั้งชื่องาน SAP ใหม่ตามรหัส จนกว่าหัวหน้ากะจะแก้ชื่อเอง
+          if (!values.sap.edited) {
+            values.sapShortText = sapDraftNow(noti, values.sap).shortText;
+            if (sapInput) sapInput.value = values.sapShortText;
+            if (sapInput) sapInput.dispatchEvent(new Event('count'));
+          }
+          drawSap();
+        }));
+      };
+      drawSap();
+    }
 
     var form = el('form', 'card');
     form.noValidate = true;
@@ -1669,13 +1999,28 @@
     limitNotiInput(number, noti.digits);
     number.addEventListener('input', function () { values.notiNo = number.value; });
     var sap = field(form, 'sapShortText', 'ชื่องาน SAP (เติมให้แล้ว แก้ได้)', input('text', ''));
+    sapInput = sap;
     sap.maxLength = noti.sapMax;
     sap.value = values.sapShortText;
     var counter = el('small', 'hint', '');
     var count = function () { counter.textContent = sap.value.length + '/' + noti.sapMax + ' ตัวอักษร'; };
-    sap.addEventListener('input', function () { values.sapShortText = sap.value; count(); });
+    sap.addEventListener('input', function () {
+      values.sapShortText = sap.value;
+      if (values.sap) values.sap.edited = true;
+      count();
+    });
+    sap.addEventListener('count', count);
     sap.parentNode.insertBefore(counter, sap.nextSibling);
+    if (noti.sap) {
+      var copySap = actionButton('small', 'คัดลอกชื่องาน', function () {
+        if (!sapReady(noti, values.sap)) return showSapLocked();
+        copyText(sap.value, copySap);
+      });
+      sap.parentNode.insertBefore(copySap, counter.nextSibling);
+    }
     count();
+    var formError = el('p', 'error hidden');
+    form.appendChild(formError);
     var next = el('button', 'primary', 'ถัดไป');
     next.type = 'submit';
     form.appendChild(next);
@@ -1683,8 +2028,17 @@
       event.preventDefault();
       var result = Core.validateNoti(values, { NOTI_DIGITS: noti.digits, SAP_SHORTTEXT_MAX: noti.sapMax });
       showFieldErrors(form, result.fields);
-      if (result.ok) showNotiConfirm(me, data, nav, result.value);
+      if (!result.ok) return;
+      // ใบงาน 31: จุดสีเหลืองต้องตรวจก่อนส่ง (ตรวจระดับ 2)
+      if (noti.sap && !sapReady(noti, values.sap)) return showSapLocked();
+      if (noti.sap) result.value.sap = sapDraftNow(noti, values.sap);
+      showNotiConfirm(me, data, nav, result.value, values);
     });
+    function showSapLocked() {
+      formError.textContent = 'ตรวจจุดสีเหลืองในข้อมูล SAP ด้านบนก่อน (แตะ "ตรวจแล้ว" หรือเลือกให้ครบ)';
+      formError.classList.remove('hidden');
+      sapBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     main.appendChild(form);
     if (fields) showFieldErrors(form, fields);
 
@@ -1694,8 +2048,163 @@
     if (others.childNodes.length) main.appendChild(others);
   }
 
+  // ---------- ข้อมูลสำหรับ SAP ในหน้ากรอกเลข Noti (ใบงาน 31) ----------
+
+  var sapCatalogCache = null;
+
+  // รายการตำแหน่งและเครื่องจักร โหลดครั้งแรกที่หัวหน้ากะกด "เปลี่ยน" แล้วจำไว้จนปิดแอป
+  function loadSapCatalog() {
+    if (sapCatalogCache) return Promise.resolve(sapCatalogCache);
+    return api('sapCatalog').then(function (res) {
+      if (!res.ok) throw new Error(res.error.message);
+      sapCatalogCache = readCatalog(res.data);
+      return sapCatalogCache;
+    });
+  }
+
+  // ร่างล่าสุดตามที่หัวหน้ากะเปลี่ยน (ตำแหน่ง เครื่อง ประเภทรั่ว)
+  function sapDraftNow(noti, state) {
+    var input = noti.sap.input;
+    return Core.sapDraft(input.job, {
+      impacts: input.impacts, reporterRole: input.reporterRole, config: input.config,
+      locationCode: state.location, equipmentId: state.equipmentId, leakType: state.leakType,
+    });
+  }
+
+  // ตรวจครบทุกจุดสีเหลืองแล้ว (งานรั่วต้องเลือกประเภทด้วย)
+  function sapReady(noti, state) {
+    var d = sapDraftNow(noti, state);
+    if (d.leak && !d.leakType) return false;
+    return d.unsure.every(function (k) { return state.checked[k]; });
+  }
+
+  // คัดลอกข้อความ (LINE บน Android บางรุ่นไม่มี clipboard API ใช้วิธีเลือกข้อความแทน)
+  function copyText(text, button) {
+    var label = button.textContent;
+    var done = function () {
+      button.textContent = 'คัดลอกแล้ว';
+      setTimeout(function () { button.textContent = label; }, 1500);
+    };
+    var fallback = function () {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try { if (document.execCommand('copy')) done(); } catch (e) { /* คัดลอกไม่ได้ ผู้ใช้เลือกข้อความเองได้ */ }
+      document.body.removeChild(area);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+    else fallback();
+  }
+
+  // การ์ด "ข้อมูลสำหรับ SAP": ระบบเติมให้ แต่ละช่องมีปุ่มคัดลอก · จุดที่ไม่แน่ใจเป็นสีเหลือง ต้องแตะยืนยันก่อน
+  // onChange เรียกเมื่อหัวหน้ากะเปลี่ยนตำแหน่ง/เครื่อง/ประเภทรั่ว/ยืนยัน (วาดการ์ดใหม่และตั้งชื่องานใหม่)
+  function sapCard(noti, values, onChange) {
+    var state = values.sap;
+    var d = sapDraftNow(noti, state);
+    var ready = sapReady(noti, state);
+    var card = el('section', 'card sap-card');
+    card.appendChild(el('h2', '', 'ข้อมูลสำหรับ SAP'));
+    card.appendChild(el('p', 'muted', 'ระบบเติมให้ ตรวจแล้วกดคัดลอกไปวางในหน้า IW21 ทีละช่อง'));
+
+    if (d.unsure.length) {
+      var warn = el('div', 'sap-unsure');
+      warn.appendChild(el('strong', '', 'ระบบไม่แน่ใจ ตรวจก่อนคัดลอก'));
+      d.unsure.forEach(function (k) {
+        var line = el('div', 'sap-unsure-row');
+        line.appendChild(el('span', '', Core.SAP_UNSURE[k]));
+        var ok = state.checked[k];
+        var tick = actionButton('small', ok ? '✓ ตรวจแล้ว' : 'ตรวจแล้ว', function () {
+          state.checked[k] = !state.checked[k];
+          onChange();
+        });
+        tick.setAttribute('aria-pressed', String(Boolean(ok)));
+        line.appendChild(tick);
+        warn.appendChild(line);
+        if (k === 'LEAK') {
+          var leakChips = el('div', 'chips');
+          Object.keys(Core.LEAK_TYPES).forEach(function (code) {
+            var chip = el('button', 'chip', 'รั่ว' + Core.LEAK_TYPES[code] + ' ' + code);
+            chip.type = 'button';
+            chip.setAttribute('aria-pressed', String(state.leakType === code));
+            chip.addEventListener('click', function () { state.leakType = code; onChange(); });
+            leakChips.appendChild(chip);
+          });
+          warn.appendChild(leakChips);
+        }
+      });
+      card.appendChild(warn);
+    }
+
+    var cat = sapCatalogCache;
+    var locName = cat ? (d.location ? locationName(cat, d.location) : '') : (d.location === noti.sap.draft.location ? noti.sap.locationName : '');
+    var machine = cat && d.equipmentId ? cat.equipment.filter(function (e) { return e.id === d.equipmentId; })[0] : null;
+    var eqName = machine ? machine.name : (d.equipmentId === noti.sap.draft.equipmentId ? noti.sap.equipmentName : '');
+    var eqText = state.equipmentId === Core.NOT_MACHINE ? '- (ไม่ใช่เครื่อง)' : d.equipmentId ? d.equipmentId + ' ' + eqName : '- (ไม่ระบุ)';
+
+    sapRow('รหัส', d.code, null, false, 'mono');
+    sapRow('Notification type', d.notiType, d.notiType, !ready);
+    sapRow('Functional loc.', d.location ? d.location + '\n' + locName : '- (ยังไม่เลือก)', d.location, false, '', 'loc');
+    sapRow('Equipment', eqText, d.equipmentId, false, '', 'eq');
+    sapRow('Priority', d.priority + (d.priority === 'High' ? ' (มีผลกระทบ)' : ' (ไม่กระทบ)'), d.priority, false);
+    sapRow('Description', d.description, d.description, false);
+    card.appendChild(el('small', 'muted', 'ชื่องาน (Short text) อยู่ในช่องด้านล่าง · Required End, Reported By, Requester E-Mail กรอกใน SAP เอง'));
+    return card;
+
+    function sapRow(name, value, copy, locked, cls, change) {
+      var line = el('div', 'sap-row');
+      var info = el('div', 'sap-info');
+      info.appendChild(el('small', 'muted', name));
+      info.appendChild(el('span', 'sap-value ' + (cls || ''), value));
+      line.appendChild(info);
+      var tools = el('div', 'sap-tools');
+      if (change) tools.appendChild(actionButton('small', 'เปลี่ยน', function () { openChange(change, line); }));
+      if (copy) {
+        var button = actionButton('small', 'คัดลอก', function () {
+          if (locked) return;
+          copyText(copy, button);
+        });
+        button.disabled = Boolean(locked);
+        tools.appendChild(button);
+      }
+      line.appendChild(tools);
+      card.appendChild(line);
+    }
+
+    // เปลี่ยนตำแหน่งหรือเครื่อง: เปิดตัวเลือกใต้แถวนั้น กด "เสร็จ" แล้ววาดการ์ดใหม่
+    function openChange(kind, line) {
+      var box = el('div', 'sap-change');
+      box.appendChild(el('p', 'muted', 'กำลังโหลดรายการ…'));
+      line.parentNode.insertBefore(box, line.nextSibling);
+      loadSapCatalog().then(function (catalog) {
+        box.innerHTML = '';
+        var temp = { areaCode: state.location, browse: Core.locationParent(state.location), equipmentId: state.equipmentId, asset: '' };
+        if (kind === 'loc') {
+          locationPicker(box, catalog, temp, { onChange: function () { state.location = temp.areaCode; } });
+        } else {
+          equipmentPicker(box, catalog, temp, {
+            onChange: function () {
+              state.equipmentId = temp.equipmentId;
+              // เลือกเครื่องที่อยู่ตำแหน่งอื่น ตำแหน่งย้ายตามเครื่อง
+              var picked = catalog.equipment.filter(function (e) { return e.id === temp.equipmentId; })[0];
+              if (picked && picked.location.indexOf(state.location) !== 0) state.location = picked.location;
+            },
+          });
+        }
+        box.appendChild(actionButton('primary', 'เสร็จ', onChange));
+      }).catch(function () {
+        box.innerHTML = '';
+        box.appendChild(el('p', 'error', 'โหลดรายการไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'));
+      });
+    }
+  }
+
   // หน้ายืนยันเลข Noti ตัวใหญ่ แบ่งทีละ 4 หลัก ให้เทียบกับหน้าจอ SAP ก่อนบันทึก
-  function showNotiConfirm(me, data, nav, values) {
+  // formValues = ค่าในหน้ากรอก (กดกลับไปแก้แล้วไม่หาย) · values.sap = ข้อมูล SAP ที่ใช้ (ใบงาน 31)
+  function showNotiConfirm(me, data, nav, values, formValues) {
     var job = data.job;
     var main = screen('ยืนยันเลข Noti');
     var card = el('section', 'card done');
@@ -1709,10 +2218,17 @@
       save.disabled = true;
       save.textContent = 'กำลังบันทึก…';
       error.classList.add('hidden');
-      api('addNoti', { jobId: job.jobId, notiNo: values.notiNo, sapShortText: values.sapShortText })
+      var payload = { jobId: job.jobId, notiNo: values.notiNo, sapShortText: values.sapShortText };
+      if (values.sap) {
+        payload.sapFuncLoc = values.sap.location;
+        payload.sapEquipment = values.sap.equipmentId;
+        payload.sapNotiType = values.sap.notiType;
+        payload.sapPriority = values.sap.priority;
+      }
+      api('addNoti', payload)
         .then(function (res) {
           if (res.ok) return goToNextNoti(me, 'บันทึก Noti ' + Core.formatNoti(values.notiNo) + ' ของ ' + job.jobId + ' แล้ว');
-          if (res.error.details && res.error.details.fields) return showNotiForm(me, data, nav, null, values, res.error.details.fields);
+          if (res.error.details && res.error.details.fields) return showNotiForm(me, data, nav, null, formValues, res.error.details.fields);
           error.textContent = res.error.message;
           error.classList.remove('hidden');
           save.disabled = false;
@@ -1726,7 +2242,7 @@
         });
     });
     card.appendChild(save);
-    card.appendChild(actionButton('', 'กลับไปแก้', function () { showNotiForm(me, data, nav, null, values); }));
+    card.appendChild(actionButton('', 'กลับไปแก้', function () { showNotiForm(me, data, nav, null, formValues); }));
     card.appendChild(error);
     main.appendChild(card);
   }

@@ -1432,7 +1432,7 @@
       var item = el('div', 'history');
       var text = (ACTION_LABEL[h.action] || h.action);
       var to = Core.JOB_STATUS_LABEL[h.toStatus];
-      // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" แต่ไม่ใช่ "ซ่อมเสร็จ → ซ่อมเสร็จ")
+      // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" "ซ่อมเสร็จ → รอปิดงาน" แต่ไม่ใช่ "ปิดงาน → ปิดงาน")
       var obvious = ['EDIT', 'FOLLOW_UP', 'CONFIRM', 'IMPACT', 'ASSESS'].indexOf(h.action) >= 0 || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
       if (to && !obvious && text.indexOf(to[0]) < 0) text += ' → ' + to[0];
       item.appendChild(el('strong', '', text));
@@ -2283,7 +2283,7 @@
     ['กำลังซ่อม', ['IN_REPAIR']],
     // ใบงาน 21: งานที่หัวหน้ากะต้องไปตาม
     ['รอคำตอบ', ['IN_REPAIR'], function (j) { return Boolean(j.followUp && j.followUp.state === 'AWAITING'); }],
-    ['ซ่อมเสร็จ', ['REPAIRED']],
+    ['รอปิดงาน', ['REPAIRED']],
     ['ปิดงาน', ['CLOSED']],
     ['ยกเลิก', ['CANCELLED']],
     ['ทุกสถานะ', null],

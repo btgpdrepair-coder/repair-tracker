@@ -145,7 +145,8 @@ var Core = (function () {
   var JOB_STATUS_LABEL = {
     PENDING_NOTI: ['รอเปิด Noti', 'warn'],
     IN_REPAIR: ['กำลังซ่อม', 'info'],
-    REPAIRED: ['ซ่อมเสร็จ', 'ok'],
+    // เจ้าของเปลี่ยนจาก "ซ่อมเสร็จ" (3 พ.ย. 2026): สถานะนี้รวมงานที่ผู้แจ้งแก้เอง และสิ่งที่ต้องทำต่อคือหัวหน้ากะปิดงาน
+    REPAIRED: ['รอปิดงาน', 'ok'],
     CLOSED: ['ปิดงาน', 'ok'],
     CANCELLED: ['ยกเลิก', 'off'],
   };
@@ -219,9 +220,17 @@ var Core = (function () {
     return Math.floor(minutes / (24 * 60)) + ' วัน';
   }
 
+  // ชั่วโมงหลักเดียว (เช่น 9:02:54) รับได้ด้วย เพราะชีตที่แปลงเวลาเป็นวันที่เองแสดงชั่วโมงก่อน 10 โมงโดยไม่มี 0 นำหน้า
   function parseTime(value) {
-    var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(value || ''));
+    var m = /^(\d{4})-(\d{2})-(\d{2}) (\d{1,2}):(\d{2}):(\d{2})$/.exec(String(value || ''));
     return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+  }
+
+  // เวลาที่อ่านจากชีตให้เป็นรูปแบบเดียว YYYY-MM-DD HH:mm:ss (เติม 0 หน้าชั่วโมงหลักเดียว)
+  // ไม่งั้นเทียบเวลาแบบข้อความผิด ("… 9:02" มาทีหลัง "… 10:00") · ค่าที่ไม่ใช่เวลาคืนตามเดิม
+  function normalizeTime(value) {
+    if (typeof value !== 'string') return value;
+    return value.replace(/^(\d{4}-\d{2}-\d{2}) (\d):(\d{2}):(\d{2})$/, '$1 0$2:$3:$4');
   }
 
   // ชื่อพื้นที่ของงาน: "อื่น ๆ" ใช้ชื่อที่พิมพ์ ที่เหลือแปลงรหัสเป็นชื่อ (รวมพื้นที่ที่ปิดใช้แล้ว)
@@ -761,6 +770,7 @@ var Core = (function () {
     canEditJob: canEditJob,
     validateJob: validateJob,
     parseTime: parseTime,
+    normalizeTime: normalizeTime,
     configNumber: configNumber,
     configFlag: configFlag,
     isTrue: configFlagValue,

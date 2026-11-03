@@ -393,7 +393,10 @@ var Core = (function () {
   var OPEN_STATUSES = [JOB_STATUS.PENDING_NOTI, JOB_STATUS.IN_REPAIR, JOB_STATUS.REPAIRED];
 
   // ---------- ผลกระทบและการประเมินความเร่งด่วน (ใบงาน 27) ----------
-  // เก็บในแถว StatusLog (ไม่เพิ่มคอลัมน์): IMPACT Note = "SAFETY,PRODUCTION" หรือ "NONE" · ASSESS Note = "SAFETY:URGENT · หมายเหตุ"
+  // เก็บในแถว StatusLog (ไม่เพิ่มคอลัมน์): IMPACT Note = "SAFETY,PRODUCTION" หรือ "NONE" (ติ๊กเพิ่มทีละด้าน) · IMPACT_REMOVE Note = ด้านที่เอาออก
+  // ASSESS Note = "DEPT:HIGH · หมายเหตุ" หรือ "SAFETY:URGENT · หมายเหตุ"
+  // แก้ 4 พ.ย. 2026: หัวหน้าแผนกของงานประเมินครั้งเดียวครอบคลุมทุกด้าน (DEPT) · จป ประเมินเพิ่มเฉพาะงานความปลอดภัย (SAFETY)
+  //   ระดับต่างกันใช้ระดับที่ด่วนกว่า · หัวหน้ากะ/หัวหน้าแผนกติ๊กเพิ่มหรือเอาออกได้ · ประเมินเก่า PRODUCTION/NCP นับเป็นของหัวหน้าแผนก
 
   var IMPACT = { SAFETY: 'ความปลอดภัย', PRODUCTION: 'การผลิต', NCP: 'NCP (ของเสีย)' };
   var IMPACT_NONE = 'NONE';
@@ -403,6 +406,9 @@ var Core = (function () {
   // กำหนดแก้นับจากเวลาแจ้ง (วัน) ปรับใน Config · ไม่เร่งด่วนไม่มีกำหนด
   var LEVEL_DAYS = { URGENT: ['LEVEL_URGENT_DAYS', 1], HIGH: ['LEVEL_HIGH_DAYS', 3], NORMAL: ['LEVEL_NORMAL_DAYS', 7] };
   var ASSESS_NOTE = /^([A-Z]+):([A-Z]+)(?: · ([\s\S]*))?$/;
+  // ผู้ประเมิน: หัวหน้าแผนกของงาน (ทุกด้าน) และ จป (เฉพาะความปลอดภัย)
+  var ASSESSOR = { DEPT: 'หัวหน้าแผนก', SAFETY: 'จป' };
+  var IMPACT_REMOVE = 'IMPACT_REMOVE';
 
   // ผลกระทบที่ผู้แจ้งเลือก ต้องมีอย่างน้อย 1 · "ไม่กระทบ" เลือกเดี่ยว คืน { ok, message, value }
   function validateImpacts(value) {
@@ -415,17 +421,22 @@ var Core = (function () {
     return { ok: !message, message: message, value: codes };
   }
 
-  // แผนกที่หัวหน้าแผนกประเมินด้านการผลิตและ NCP ได้ (Config PROD_DEPARTMENT ค่าเริ่มต้น "ผลิต")
-  function prodDepartment(config) {
-    return text((config || {}).PROD_DEPARTMENT) || 'ผลิต';
+  // ผู้ใช้คนนี้ประเมินในฐานะ assessor (DEPT / SAFETY) ให้งานนี้ได้ไหม: หัวหน้าแผนกของงาน · จป · แอดมินแทนได้ทุกแบบ
+  function canAssess(user, assessor, job) {
+    if (!user || !ASSESSOR[assessor]) return false;
+    if (user.Role === 'ADMIN') return true;
+    if (assessor === 'SAFETY') return user.Role === 'SAFETY';
+    return user.Role === 'DEPT_HEAD' && Boolean(job) && text(user.Department) === text(job.Department);
   }
 
-  // ผู้ใช้คนนี้ประเมินด้านนี้ได้ไหม: จป = ความปลอดภัย · หัวหน้าแผนกผลิต = การผลิตและ NCP · แอดมินทุกด้าน
-  function canAssess(user, impact, config) {
+  // หัวหน้ากะ (แผนกตัวเอง รวม จป) และหัวหน้าแผนกของงาน ติ๊กผลกระทบเพิ่มหรือเอาออกได้ · จป ติ๊กเพิ่มความปลอดภัยได้ทุกแผนก
+  // แอดมินทำได้ทุกงาน · ช่างไม่ได้ (เจ้าของตัดสิน 4 พ.ย. 2026)
+  function canEditImpact(user, job, impact, adding) {
     if (!user || !IMPACT[impact]) return false;
     if (user.Role === 'ADMIN') return true;
-    if (impact === 'SAFETY') return user.Role === 'SAFETY';
-    return user.Role === 'DEPT_HEAD' && text(user.Department) === prodDepartment(config);
+    var sameDept = text(user.Department) === text(job.Department);
+    if ((actsAsLead(user) || user.Role === 'DEPT_HEAD') && sameDept) return true;
+    return Boolean(adding) && impact === 'SAFETY' && user.Role === 'SAFETY';
   }
 
   function addHours(time, hours) {
@@ -433,8 +444,15 @@ var Core = (function () {
     return t === null ? '' : new Date(t + hours * 3600000).toISOString().slice(0, 19).replace('T', ' ');
   }
 
-  // ผลกระทบของงานจากประวัติ { impacts, none, assessments: { ด้าน: { level, note, at, byUserId } }, pending, level, deadline, late }
-  // level = ระดับที่ด่วนที่สุดในด้านที่ประเมินแล้ว · deadline = เวลาแจ้ง + วันของระดับนั้น · late = ยังไม่จบและเลยกำหนด
+  // ผู้ประเมินที่งานนี้ต้องมี: หัวหน้าแผนกเมื่อมีผลกระทบด้านใดก็ได้ · จป เมื่อติ๊กความปลอดภัย
+  function assessorsFor(impacts) {
+    if (!impacts.length) return [];
+    return impacts.indexOf('SAFETY') >= 0 ? ['DEPT', 'SAFETY'] : ['DEPT'];
+  }
+
+  // ผลกระทบของงานจากประวัติ { impacts, none, assessments: { DEPT|SAFETY: { level, note, at, byUserId } }, assessors, pending, level, deadline, late }
+  // pending = ผู้ประเมินที่ยังไม่ประเมิน · level = ระดับที่ด่วนที่สุดในการประเมินที่ยังใช้อยู่
+  // deadline = เวลาแจ้ง + วันของระดับนั้น · late = ยังไม่จบและเลยกำหนด
   function impactInfo(job, logs, now, config) {
     var impacts = [];
     var none = false;
@@ -447,21 +465,27 @@ var Core = (function () {
             if (c === IMPACT_NONE) none = !impacts.length;
             else if (IMPACT[c] && impacts.indexOf(c) < 0) { impacts.push(c); none = false; }
           });
+        } else if (l.Action === IMPACT_REMOVE) {
+          impacts = impacts.filter(function (c) { return c !== text(l.Note); });
+          if (!impacts.length) none = true;
         } else if (l.Action === 'ASSESS') {
           var m = ASSESS_NOTE.exec(String(l.Note || ''));
-          if (m && IMPACT[m[1]] && LEVEL[m[2]]) assessments[m[1]] = { level: m[2], note: m[3] || '', at: String(l.At), byUserId: l.ByUserID || '' };
+          // ประเมินเก่า (ก่อน 4 พ.ย. 2026) ด้านการผลิต/NCP เป็นของหัวหน้าแผนก
+          var key = m && (m[1] === 'PRODUCTION' || m[1] === 'NCP') ? 'DEPT' : m && m[1];
+          if (m && ASSESSOR[key] && LEVEL[m[2]]) assessments[key] = { level: m[2], note: m[3] || '', at: String(l.At), byUserId: l.ByUserID || '' };
         }
       });
-    var pending = impacts.filter(function (c) { return !assessments[c]; });
+    var assessors = assessorsFor(impacts);
+    var pending = assessors.filter(function (k) { return !assessments[k]; });
     var level = '';
-    impacts.forEach(function (c) {
-      var a = assessments[c];
+    assessors.forEach(function (k) {
+      var a = assessments[k];
       if (a && (!level || LEVEL_ORDER.indexOf(a.level) < LEVEL_ORDER.indexOf(level))) level = a.level;
     });
     var deadline = '';
     if (LEVEL_DAYS[level]) deadline = addHours(job.CreatedAt, configNumber(config, LEVEL_DAYS[level][0], LEVEL_DAYS[level][1]) * 24);
     var late = Boolean(deadline) && OPEN_STATUSES.indexOf(job.Status) >= 0 && String(now) > deadline;
-    return { impacts: impacts, none: none, assessments: assessments, pending: pending, level: level, deadline: deadline, late: late };
+    return { impacts: impacts, none: none, assessments: assessments, assessors: assessors, pending: pending, level: level, deadline: deadline, late: late };
   }
 
   // ลำดับความด่วนสำหรับเรียงคิว: ด่วนมาก 0 · ด่วน 1 · อื่น ๆ 9
@@ -469,8 +493,8 @@ var Core = (function () {
     return level === 'URGENT' ? 0 : level === 'HIGH' ? 1 : 9;
   }
 
-  function assessNote(impact, level, note) {
-    return impact + ':' + level + (note ? ' · ' + note : '');
+  function assessNote(assessor, level, note) {
+    return assessor + ':' + level + (note ? ' · ' + note : '');
   }
 
   // เกณฑ์งานค้างของสถานะ { hours, label } เช่น { 168, '7 วัน' } สถานะที่จบแล้วคืน null
@@ -776,6 +800,12 @@ var Core = (function () {
   // มีคำตอบ = มีบันทึกและยังไม่ถึงวันนัด · รอคำตอบ = งานค้างที่ยังไม่มีบันทึก หรือถึงวันนัดแล้ว (GLOSSARY)
   var FOLLOW_UP_STATE = { ANSWERED: 'ANSWERED', AWAITING: 'AWAITING' };
   var FOLLOW_UP_MAX_DAYS = 30;
+  // วันนัดตามไกลสุดตามระดับความด่วน (เจ้าของตกลง 4 พ.ย. 2026) · ปกติและยังไม่ประเมิน 7 วัน
+  var FOLLOW_UP_DAYS_BY_LEVEL = { URGENT: 1, HIGH: 3, NORMAL: 7, LOW: FOLLOW_UP_MAX_DAYS };
+
+  function followUpMaxDays(level) {
+    return FOLLOW_UP_DAYS_BY_LEVEL[level] || 7;
+  }
   var DELAY_OTHER_LABEL = 'อื่น ๆ';
   var FOLLOW_UP_NOTE = /^([\s\S]*?) · นัดตาม (\d{4}-\d{2}-\d{2})(?: · ([\s\S]*))?$/;
 
@@ -792,8 +822,9 @@ var Core = (function () {
 
   // ตรวจบันทึกการตาม คืน { ok, fields, value: { reason, reasonLabel, note, nextDate } }
   // reasons = [{ code, label, active }] จากชีต DelayReasons · "อื่น ๆ" (OTHER) ใช้ได้เสมอแต่ต้องพิมพ์
-  // today = วันที่ไทย YYYY-MM-DD · วันนัดต้องหลังวันนี้และไม่เกิน 30 วัน (รอนานกว่านั้นให้บันทึกซ้ำเมื่อถึงวันนัด)
-  function validateFollowUp(input, reasons, today) {
+  // today = วันที่ไทย YYYY-MM-DD · วันนัดต้องหลังวันนี้และไม่เกิน maxDays (ตามระดับความด่วน ไม่ส่ง = 30 วัน)
+  function validateFollowUp(input, reasons, today, maxDays) {
+    maxDays = maxDays || FOLLOW_UP_MAX_DAYS;
     input = input || {};
     var code = text(input.reason);
     var note = text(input.note);
@@ -806,8 +837,8 @@ var Core = (function () {
     else if (note.length > NOTE_MAX) fields.note = 'ยาวเกิน ' + NOTE_MAX + ' ตัวอักษร';
     if (!isDate(nextDate)) fields.nextDate = 'กรุณาเลือกวันนัดตาม';
     else if (nextDate <= today) fields.nextDate = 'วันนัดต้องเป็นพรุ่งนี้หรือหลังจากนั้น';
-    else if (nextDate > addDays(today, FOLLOW_UP_MAX_DAYS)) {
-      fields.nextDate = 'นัดได้ไกลสุด ' + FOLLOW_UP_MAX_DAYS + ' วัน ถ้ารอนานกว่านั้นให้บันทึกใหม่เมื่อถึงวันนัด';
+    else if (nextDate > addDays(today, maxDays)) {
+      fields.nextDate = 'งานนี้นัดได้ไกลสุด ' + maxDays + ' วันตามความด่วน ถ้ารอนานกว่านั้นให้บันทึกใหม่เมื่อถึงวันนัด';
     }
     return {
       ok: Object.keys(fields).length === 0,
@@ -970,8 +1001,11 @@ var Core = (function () {
     LEVEL: LEVEL,
     LEVEL_ORDER: LEVEL_ORDER,
     validateImpacts: validateImpacts,
-    prodDepartment: prodDepartment,
+    ASSESSOR: ASSESSOR,
+    IMPACT_REMOVE: IMPACT_REMOVE,
     canAssess: canAssess,
+    canEditImpact: canEditImpact,
+    assessorsFor: assessorsFor,
     impactInfo: impactInfo,
     levelRank: levelRank,
     assessNote: assessNote,
@@ -980,6 +1014,7 @@ var Core = (function () {
     FOLLOW_UP: FOLLOW_UP,
     FOLLOW_UP_STATE: FOLLOW_UP_STATE,
     FOLLOW_UP_MAX_DAYS: FOLLOW_UP_MAX_DAYS,
+    followUpMaxDays: followUpMaxDays,
     DELAY_OTHER_LABEL: DELAY_OTHER_LABEL,
     addDays: addDays,
     validateFollowUp: validateFollowUp,

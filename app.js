@@ -354,6 +354,10 @@
       (res.data.departmentsWithoutLead || []).forEach(function (dept) {
         main.appendChild(el('p', 'warning', '⚠️ แผนก ' + dept + ' ยังไม่มีหัวหน้ากะ งานที่คนแผนกนี้แจ้งจะไม่มีหัวหน้ากะคนไหนเห็น ให้อนุมัติหรือเปลี่ยนโรลให้มีหัวหน้ากะของแผนกนี้อย่างน้อย 1 คน'));
       });
+      // ใบงาน 27 (แก้ 4 พ.ย. 2026): แผนกที่ไม่มีหัวหน้าแผนก งานที่กระทบของแผนกนั้นจะค้างรอประเมิน
+      (res.data.departmentsWithoutHead || []).forEach(function (dept) {
+        main.appendChild(el('p', 'warning', '⚠️ แผนก ' + dept + ' ยังไม่มีหัวหน้าแผนก งานที่กระทบของแผนกนี้จะค้าง "รอประเมิน" ให้ตั้งหัวหน้าแผนกของแผนกนี้อย่างน้อย 1 คน'));
+      });
       var users = res.data.users;
       var pending = users.filter(function (u) { return u.status === 'PENDING'; });
       var approved = users.filter(function (u) { return u.status === 'APPROVED'; });
@@ -1278,6 +1282,17 @@
     body.appendChild(el('small', 'muted', 'ไลน์หยุดหรือมีคนเสี่ยงอันตราย โทรแจ้งก่อน แล้วค่อยแจ้งในระบบ'));
   }
 
+  // หมายเหตุในประวัติ: แปลงรหัสผลกระทบและการประเมินเป็นภาษาไทย ("SAFETY,PRODUCTION" → "ความปลอดภัย, การผลิต"
+  // · "DEPT:HIGH · กั้นพื้นที่" → "หัวหน้าแผนก: ด่วน · กั้นพื้นที่") การกระทำอื่นแสดงตามเดิม
+  function historyNote(h) {
+    var label = function (c) { return c === Core.IMPACT_NONE ? Core.IMPACT_NONE_LABEL : Core.IMPACT[c] || c; };
+    if (h.action === 'IMPACT' || h.action === 'IMPACT_REMOVE') return h.note.split(',').map(label).join(', ');
+    var m = h.action === 'ASSESS' && /^([A-Z]+):([A-Z]+)(?: · ([\s\S]*))?$/.exec(h.note);
+    if (!m) return h.note;
+    var who = Core.ASSESSOR[m[1]] || (m[1] === 'SAFETY' ? Core.ASSESSOR.SAFETY : Core.ASSESSOR.DEPT);
+    return who + ': ' + (Core.LEVEL[m[2]] || m[2]) + (m[3] ? ' · ' + m[3] : '');
+  }
+
   // ป้ายผลกระทบในรายการ (ใบงาน 27): รอประเมิน · ระดับด่วนมาก/ด่วน
   function impactBadges(impact) {
     var box = el('span', 'badges');
@@ -1285,7 +1300,7 @@
     if (impact.level === 'URGENT') box.appendChild(badge('ด่วนมาก', 'err'));
     else if (impact.level === 'HIGH') box.appendChild(badge('ด่วน', 'warn'));
     if (impact.pending.length) {
-      box.appendChild(badge('รอประเมิน · ' + impact.pending.map(function (c) { return Core.IMPACT[c]; }).join(', '), 'info'));
+      box.appendChild(badge('รอประเมิน · ' + impact.pending.map(function (c) { return Core.ASSESSOR[c] || Core.IMPACT[c]; }).join(', '), 'info'));
     }
     return box;
   }
@@ -1451,6 +1466,7 @@
     NOT_FIXED: 'ผู้แจ้งแจ้งว่ายังไม่หาย',
     SELF_FIX: 'ผู้แจ้งแก้เอง',
     IMPACT: 'ติ๊กผลกระทบ',
+    IMPACT_REMOVE: 'เอาผลกระทบออก',
     ASSESS: 'ประเมินความเร่งด่วน',
   };
 
@@ -1700,11 +1716,11 @@
       var text = (ACTION_LABEL[h.action] || h.action);
       var to = Core.JOB_STATUS_LABEL[h.toStatus];
       // ต่อท้ายสถานะใหม่เฉพาะเมื่อชื่อการกระทำยังไม่บอก (เช่น "เปิด Noti → กำลังซ่อม" "ซ่อมเสร็จ → รอปิดงาน" แต่ไม่ใช่ "ปิดงาน → ปิดงาน")
-      var obvious = ['EDIT', 'FOLLOW_UP', 'CONFIRM', 'IMPACT', 'ASSESS'].indexOf(h.action) >= 0 || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
+      var obvious = ['EDIT', 'FOLLOW_UP', 'CONFIRM', 'IMPACT', 'IMPACT_REMOVE', 'ASSESS'].indexOf(h.action) >= 0 || (h.action === 'CREATE' && h.toStatus === 'PENDING_NOTI');
       if (to && !obvious && text.indexOf(to[0]) < 0) text += ' → ' + to[0];
       item.appendChild(el('strong', '', text));
       item.appendChild(el('small', 'muted', shortTime(h.at) + (h.by ? ' · ' + h.by : '')));
-      if (h.note) item.appendChild(el('small', '', h.note));
+      if (h.note) item.appendChild(el('small', '', historyNote(h)));
       history.appendChild(item);
     });
     if (!data.history.length) history.appendChild(el('p', 'muted', 'ยังไม่มีประวัติ'));
@@ -2415,17 +2431,41 @@
     if (info.level) head.appendChild(badge(Core.LEVEL[info.level], LEVEL_KIND[info.level]));
     card.appendChild(head);
     if (info.none) card.appendChild(el('p', 'muted', Core.IMPACT_NONE_LABEL));
-    info.impacts.forEach(function (i) {
+    // ด้านที่ติ๊กไว้ · หัวหน้ากะและหัวหน้าแผนกของงานเอาด้านที่เกินจริงออกได้ (แก้ 4 พ.ย. 2026)
+    if (info.impacts.length) {
+      var ticked = el('div', 'chips');
+      info.impacts.forEach(function (i) {
+        ticked.appendChild(badge(i.label, 'info'));
+        if (!i.canRemove) return;
+        var remove = el('button', 'link', 'เอาออก');
+        remove.type = 'button';
+        remove.addEventListener('click', function () {
+          if (!window.confirm('เอา "' + i.label + '" ออกจากงานนี้? ระบบเก็บประวัติว่าคุณเป็นคนเอาออก')) return;
+          remove.disabled = true;
+          api('removeImpact', { jobId: data.job.jobId, impact: i.code })
+            .then(function (res) {
+              if (res.ok) return self.go('เอา' + i.label + 'ออกแล้ว');
+              remove.disabled = false;
+              window.alert(res.error.message);
+            })
+            .catch(function () { remove.disabled = false; window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง'); });
+        });
+        ticked.appendChild(remove);
+      });
+      card.appendChild(ticked);
+    }
+    // ผลประเมิน: หัวหน้าแผนก (ทุกด้าน) · จป (เฉพาะความปลอดภัย) · ระดับของงาน = ระดับที่ด่วนกว่า
+    (info.assessments || []).forEach(function (a) {
       var item = el('div', 'history');
       var top = el('div', 'job-head');
-      top.appendChild(el('strong', '', i.label));
-      top.appendChild(i.level ? badge(Core.LEVEL[i.level], LEVEL_KIND[i.level]) : badge('รอประเมิน', 'info'));
+      top.appendChild(el('strong', '', 'ประเมินโดย' + a.label));
+      top.appendChild(a.level ? badge(Core.LEVEL[a.level], LEVEL_KIND[a.level]) : badge('รอประเมิน', 'info'));
       item.appendChild(top);
-      if (i.note) item.appendChild(el('small', '', i.note));
-      if (i.by) item.appendChild(el('small', 'muted', 'ประเมินโดย ' + i.by + ' · ' + shortTime(i.at)));
-      if (i.canAssess) {
-        item.appendChild(actionButton(i.level ? 'small' : 'primary small', i.level ? 'เปลี่ยนระดับ' : 'ประเมิน',
-          function () { showAssess(me, data, i, self); }));
+      if (a.note) item.appendChild(el('small', '', a.note));
+      if (a.by) item.appendChild(el('small', 'muted', a.by + ' · ' + shortTime(a.at)));
+      if (a.canAssess) {
+        item.appendChild(actionButton(a.level ? 'small' : 'primary small', a.level ? 'เปลี่ยนระดับ' : 'ประเมิน',
+          function () { showAssess(me, data, a, self); }));
       }
       card.appendChild(item);
     });
@@ -2438,7 +2478,7 @@
         var chip = el('button', 'chip', '+ ' + Core.IMPACT[code]);
         chip.type = 'button';
         chip.addEventListener('click', function () {
-          if (!window.confirm('ติ๊กเพิ่มว่างานนี้กระทบ' + Core.IMPACT[code] + '? ติ๊กแล้วเอาออกไม่ได้')) return;
+          if (!window.confirm('ติ๊กเพิ่มว่างานนี้กระทบ' + Core.IMPACT[code] + '?')) return;
           chip.disabled = true;
           api('addImpact', { jobId: data.job.jobId, impact: code })
             .then(function (res) {
@@ -2456,14 +2496,18 @@
     return card;
   }
 
-  // ฟอร์มประเมินความเร่งด่วน 1 ด้าน: 4 ระดับ + หมายเหตุ (ไม่บังคับ)
+  // ฟอร์มประเมินความเร่งด่วนในฐานะหัวหน้าแผนกหรือ จป: 4 ระดับ + หมายเหตุ (ไม่บังคับ)
+  // impact = แถวผลประเมิน { code: DEPT | SAFETY, label, level, note } จาก data.impact.assessments
   function showAssess(me, data, impact, nav) {
-    var main = screen('ประเมิน' + impact.label);
+    var main = screen('ประเมิน' + (impact.code === 'SAFETY' ? 'ความปลอดภัย' : 'ผลกระทบ'));
     backButton(main, nav);
     main.appendChild(jobSummary(me, data, nav));
     var form = el('form', 'card');
     form.noValidate = true;
-    form.appendChild(el('h1', '', 'ประเมิน' + impact.label));
+    var title = impact.code === 'SAFETY' ? 'ประเมินความปลอดภัย (จป)' : 'ประเมินผลกระทบและความรุนแรง (หัวหน้าแผนก)';
+    form.appendChild(el('h1', '', title));
+    var sides = (data.impact.impacts || []).map(function (i) { return i.label; }).join(', ');
+    if (sides) form.appendChild(el('p', 'muted', 'งานนี้กระทบ: ' + sides));
     var box = el('fieldset', 'field');
     box.dataset.field = 'level';
     box.appendChild(el('legend', '', 'ความเร่งด่วน *'));
@@ -2495,9 +2539,9 @@
       if (!picked) return;
       submit.disabled = true;
       submit.textContent = 'กำลังบันทึก…';
-      api('assessImpact', { jobId: data.job.jobId, impact: impact.code, level: picked.value, note: note.trim() })
+      api('assessImpact', { jobId: data.job.jobId, assessor: impact.code, level: picked.value, note: note.trim() })
         .then(function (res) {
-          if (res.ok) return nav.go('ประเมิน' + impact.label + 'แล้ว: ' + Core.LEVEL[picked.value]);
+          if (res.ok) return nav.go('บันทึกการประเมินแล้ว: ' + Core.LEVEL[picked.value]);
           if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
           error.textContent = res.error.message;
           error.classList.remove('hidden');
@@ -2752,7 +2796,8 @@
     var card = el('section', 'card');
     var head = el('div', 'card-head');
     // จป: คิวรอเปิด Noti/รอปิดงานเป็นของแผนกตัวเอง (หัวหน้ากะ) · คิวรอประเมินทุกแผนก
-    var ownDept = me.role === 'LEAD' || (me.role === 'SAFETY' && view !== 'assess');
+    // หัวหน้าแผนกเห็นเฉพาะงานแผนกตัวเองทุกคิว (แก้ 4 พ.ย. 2026)
+    var ownDept = me.role === 'LEAD' || me.role === 'DEPT_HEAD' || (me.role === 'SAFETY' && view !== 'assess');
     var scope = ownDept ? me.department : 'ทุกแผนก';
     head.appendChild(el('h1', '', QUEUE_TITLE[view] + ' · ' + scope + ' (' + shown.length + ')'));
     head.appendChild(actionButton('small', 'โหลดใหม่', function () { showQueue(me, view); }));
@@ -2818,8 +2863,8 @@
       filters.status = Number(v);
       rerender();
     }));
-    // หัวหน้ากะเห็นเฉพาะแผนกตัวเอง จึงไม่มีตัวกรองแผนก
-    if (me.role !== 'LEAD') {
+    // หัวหน้ากะและหัวหน้าแผนกเห็นเฉพาะแผนกตัวเอง จึงไม่มีตัวกรองแผนก
+    if (me.role !== 'LEAD' && me.role !== 'DEPT_HEAD') {
       var depts = unique(data.jobs.map(function (j) { return j.department; }).filter(Boolean)).sort();
       bar.appendChild(filterSelect([['', 'ทุกแผนก']].concat(depts.map(function (d) { return [d, d]; })), filters.department, function (v) {
         filters.department = v;
@@ -2856,7 +2901,7 @@
       top.appendChild(el('strong', '', job.title));
       top.appendChild(listBadge(job, true));
       item.appendChild(top);
-      var parts = me.role === 'LEAD' ? [] : [job.department];
+      var parts = me.role === 'LEAD' || me.role === 'DEPT_HEAD' ? [] : [job.department];
       item.appendChild(el('small', 'muted', parts.concat([job.areaName, Core.ageText(job.createdAt, data.now)]).filter(Boolean).join(' · ')));
       if (job.followUp) item.appendChild(followUpBadges(job.followUp));
       if (job.impact) item.appendChild(impactBadges(job.impact));

@@ -502,16 +502,10 @@
   var SAP_STEP_FIELDS = { 1: ['photos'], 2: ['area', 'locationDetail'], 3: ['asset', 'symptom'], 4: ['impacts', 'detail', 'notiNo', 'sapShortText'] };
   var MIC_HINT = 'กดไมค์บนแป้นพิมพ์เพื่อพูดแทนพิมพ์ได้';
 
-  // แบบร่างเก็บในเครื่อง (รวมรูป) ปิดแอปกลางคันแล้วเปิดใหม่ยังอยู่ · ที่เก็บเต็มหรือถูกปิดก็ใช้ต่อได้แค่ไม่มีแบบร่าง
-  function draftKey(me) { return 'btgpd-draft-' + me.userId; }
-  function loadDraft(me) {
-    try { return JSON.parse(localStorage.getItem(draftKey(me)) || 'null'); } catch (e) { return null; }
-  }
-  function saveDraft(me, draft) {
-    try { localStorage.setItem(draftKey(me), JSON.stringify(draft)); } catch (e) { /* ใช้ต่อได้โดยไม่มีแบบร่าง */ }
-  }
+  // ไม่จำแบบร่างข้ามการเปิดแอป (เจ้าของตัดสิน 4 พ.ย. 2026: แบบร่างเก่าโผล่มาตอนแจ้งงานใหม่ทำให้สับสน)
+  // ข้อมูลที่กรอกอยู่ในหน้าจนกว่าจะปิดแอปหรือออกจากหน้าแจ้งงาน · ลบแบบร่างที่หน้าแอปรุ่นก่อนเก็บไว้ในมือถือทิ้ง
   function clearDraft(me) {
-    try { localStorage.removeItem(draftKey(me)); } catch (e) { /* ไม่มีอะไรต้องทำ */ }
+    try { localStorage.removeItem('btgpd-draft-' + me.userId); } catch (e) { /* ไม่มีอะไรต้องทำ */ }
   }
 
   // รหัสแบบร่าง ส่งไปกับงาน กดส่งซ้ำตอนเน็ตหลุดแล้ว backend คืนงานเดิม ไม่เกิดงานซ้ำ
@@ -1024,20 +1018,10 @@
           res.data.equipment = res.data.sap.equipment;
           res.data.areas = [];
         }
-        var draft = loadDraft(me);
-        if (!draft || !draft.clientRequestId) {
-          draft = {
-            clientRequestId: newRequestId(),
-            photos: [],
-            areaCode: res.data.sap ? '' : res.data.lastAreaCode || '',
-            areaOther: res.data.sap ? '' : res.data.lastAreaOther || '',
-          };
-        }
-        // แบบร่างก่อนมีตำแหน่ง SAP ที่พิมพ์ "อะไรเสีย" ไว้แล้ว แสดงเป็นพิมพ์เอง
-        if (res.data.sap && draft.asset && !draft.equipmentId) draft.assetTyping = true;
-        // ใบงาน 27: ผลกระทบบังคับเลือก (แบบร่างเก่าที่ยังไม่มีช่องนี้เริ่มที่ยังไม่เลือก)
-        if (!Array.isArray(draft.impacts)) draft.impacts = [];
-        showReportStep(me, res.data, draft, draft.step || 1);
+        clearDraft(me);
+        // เริ่มว่างทุกครั้ง ไม่เติมพื้นที่ของงานก่อน · รหัสคำขอใหม่ต่อการแจ้ง 1 ครั้ง กดส่งซ้ำตอนเน็ตหลุดไม่เกิดงานซ้ำ
+        var draft = { clientRequestId: newRequestId(), photos: [], impacts: [], areaCode: '', areaOther: '' };
+        showReportStep(me, res.data, draft, 1);
       })
       .catch(function () { showError('โหลดหน้าแจ้งงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
   }
@@ -1049,10 +1033,9 @@
     var whatStep = sapMode ? 3 : 2;
     var stepFields = sapMode ? SAP_STEP_FIELDS : STEP_FIELDS;
     draft.step = step;
-    saveDraft(me, draft);
     var main = screen('แจ้งงานใหม่');
     var rerender = function () { showReportStep(me, options, draft, step); };
-    var persist = function () { saveDraft(me, draft); };
+    var persist = function () {};
 
     var progress = el('div', 'progress');
     progress.appendChild(el('span', 'muted', 'ขั้น ' + step + ' จาก 4'));

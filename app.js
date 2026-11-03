@@ -34,7 +34,7 @@
     LEAD: 'เปิด Noti ใน SAP ยกเลิก และปิดงาน ของแผนกตัวเอง',
     PLANNER: 'ดูสรุปงานค้างทั้งหมด',
     TECH: 'ดูงานรอซ่อม และแนบรูปหลังซ่อม',
-    SAFETY: 'ประเมินงานที่กระทบความปลอดภัย ทุกแผนก',
+    SAFETY: 'ประเมินงานที่กระทบความปลอดภัย ทุกแผนก และทำงานหัวหน้ากะของแผนกตัวเอง',
     DEPT_HEAD: 'ดูงานของแผนกตัวเอง (หัวหน้าแผนกผลิตประเมินงานที่กระทบการผลิตและ NCP)',
     DIRECTOR: 'ดูภาพรวมงานซ่อมทุกแผนก',
   };
@@ -2242,7 +2242,9 @@
     }
     var card = el('section', 'card');
     var head = el('div', 'card-head');
-    var scope = me.role === 'LEAD' ? me.department : 'ทุกแผนก';
+    // จป: คิวรอเปิด Noti/รอปิดงานเป็นของแผนกตัวเอง (หัวหน้ากะ) · คิวรอประเมินทุกแผนก
+    var ownDept = me.role === 'LEAD' || (me.role === 'SAFETY' && view !== 'assess');
+    var scope = ownDept ? me.department : 'ทุกแผนก';
     head.appendChild(el('h1', '', QUEUE_TITLE[view] + ' · ' + scope + ' (' + shown.length + ')'));
     head.appendChild(actionButton('small', 'โหลดใหม่', function () { showQueue(me, view); }));
     card.appendChild(head);
@@ -2261,7 +2263,7 @@
       var meta = view === 'close'
         ? 'ซ่อมเสร็จ ' + Core.ageText(job.repairedAt || job.since, data.now) + 'ก่อน' + (job.repairedBy ? (job.selfFix ? ' · แก้เองโดย ' : ' · ช่าง ') + job.repairedBy : '')
         : [job.reporterName, 'แจ้งมา ' + Core.ageText(job.createdAt, data.now)].filter(Boolean).join(' · ');
-      info.appendChild(el('small', 'muted', (me.role === 'LEAD' ? '' : job.department + ' · ') + meta));
+      info.appendChild(el('small', 'muted', (ownDept ? '' : job.department + ' · ') + meta));
       if (job.followUp) info.appendChild(followUpBadges(job.followUp));
       if (job.impact) info.appendChild(impactBadges(job.impact));
       var confirm = view === 'close' && confirmBadge(job);
@@ -2471,8 +2473,8 @@
     if (page === 'my') return showMyJobs(me);
     if (page === 'job') return showJob(me, params.get('id'));
     if (page === 'queue-noti' || page === 'queue-close') {
-      if (me.role === 'LEAD' || me.role === 'ADMIN') return showQueue(me, page.slice(6));
-      return showError('หน้านี้สำหรับหัวหน้ากะและแอดมิน');
+      if (Core.LEAD_ROLES.indexOf(me.role) >= 0 || me.role === 'ADMIN') return showQueue(me, page.slice(6));
+      return showError('หน้านี้สำหรับหัวหน้ากะ จป และแอดมิน');
     }
     if (page === 'queue-repair') {
       if (['TECH', 'PLANNER', 'ADMIN'].indexOf(me.role) >= 0) return showQueue(me, 'repair');

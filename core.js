@@ -152,7 +152,14 @@ var Core = (function () {
   };
 
   // โรลที่แจ้งงานได้ (SPEC ตารางโรลและสิทธิ์)
-  var REPORTER_ROLES = ['STAFF', 'LEAD', 'ADMIN'];
+  var REPORTER_ROLES = ['STAFF', 'LEAD', 'ADMIN', 'SAFETY'];
+
+  // โรลที่ทำงานหัวหน้ากะของแผนกตัวเอง: จป = หัวหน้ากะแผนกตัวเอง (SHE) + ประเมินความปลอดภัยทุกแผนก (เจ้าของตัดสิน 3 พ.ย. 2026)
+  var LEAD_ROLES = ['LEAD', 'SAFETY'];
+
+  function actsAsLead(user) {
+    return LEAD_ROLES.indexOf((user || {}).Role) >= 0;
+  }
 
   // รหัสของปุ่ม "อื่น ๆ" ทั้งอาการและพื้นที่ ไม่มีในชีต ข้อความที่พิมพ์อยู่ใน SymptomOther / AreaOther
   var OTHER = 'OTHER';
@@ -578,7 +585,7 @@ var Core = (function () {
   function jobPermissions(job, user, config) {
     var s = job.Status;
     var admin = user.Role === 'ADMIN';
-    var manager = admin || (user.Role === 'LEAD' && job.Department === user.Department);
+    var manager = admin || (actsAsLead(user) && job.Department === user.Department);
     var noNoti = configFlag(config, 'ALLOW_CLOSE_WITHOUT_NOTI', true);
     var reasons = [];
     if (manager) {
@@ -589,7 +596,7 @@ var Core = (function () {
     // ใบงาน 28: ผู้แจ้งที่เปิด Notification ใน SAP เองได้ ใส่เลข Noti ให้งานที่ตัวเองแจ้ง
     var ownNoti = s === JOB_STATUS.PENDING_NOTI && job.ReporterID === user.UserID && canOpenNoti(user);
     // ใบงาน 25 และ 29: ผู้แจ้งที่ไม่ใช่หัวหน้ากะหรือแอดมิน (สองโรลนั้นใช้แก้เสร็จหน้างานและปิดงานเองอยู่แล้ว)
-    var ownReporter = job.ReporterID === user.UserID && ['LEAD', 'ADMIN'].indexOf(user.Role) < 0;
+    var ownReporter = job.ReporterID === user.UserID && !admin && !actsAsLead(user);
     return {
       addNoti: (manager && s === JOB_STATUS.PENDING_NOTI) || ownNoti,
       fixOnSite: manager && noNoti && s === JOB_STATUS.PENDING_NOTI,
@@ -751,6 +758,8 @@ var Core = (function () {
     JOB_STATUS: JOB_STATUS,
     JOB_STATUS_LABEL: JOB_STATUS_LABEL,
     REPORTER_ROLES: REPORTER_ROLES,
+    LEAD_ROLES: LEAD_ROLES,
+    actsAsLead: actsAsLead,
     OTHER: OTHER,
     TITLE_MAX: TITLE_MAX,
     ASSET_MAX: ASSET_MAX,

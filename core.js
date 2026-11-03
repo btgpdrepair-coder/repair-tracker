@@ -355,6 +355,7 @@ var Core = (function () {
         locationDetail: locationDetail,
         detail: detail,
         title: jobTitle(asset, symptomLabel),
+        symptomLabel: symptomLabel,
         impacts: impacts,
       },
     };
@@ -580,11 +581,30 @@ var Core = (function () {
     return parts.length > 1 ? parts.join('-') : '';
   }
 
+  // ตำแหน่งแม่ที่มีอยู่ในรายการจริง: SAP บางที่ไม่มีชั้นแม่ (เช่น ห้องในพื้นที่บำบัดน้ำเสียที่ไม่มีรายการ "ชั้น 1")
+  // ไล่ขึ้นไปจนเจอบรรพบุรุษที่มี ไม่เจอเลย = ชั้นบนสุด ('') · ห้องจึงไม่ตกหล่นตอนไล่ชั้น
+  function locationParentIn(locations, code) {
+    return nearestParent(locationCodes(locations), code);
+  }
+
+  function locationCodes(locations) {
+    var codes = {};
+    (locations || []).forEach(function (l) { codes[l.code] = true; });
+    return codes;
+  }
+
+  function nearestParent(codes, code) {
+    var parent = locationParent(code);
+    while (parent && !codes[parent]) parent = locationParent(parent);
+    return parent;
+  }
+
   // ตำแหน่งลูกที่เลือกต่อได้ (ไม่แสดง "ตัวแม่" แต่แสดงห้องข้างใต้แทน) · code ว่าง = พื้นที่ชั้นบนสุด
   function locationChildren(locations, code) {
     code = text(code);
+    var codes = locationCodes(locations);
     return (locations || []).filter(function (l) {
-      return l.code !== code && locationParent(l.code) === code && !/-XXX$/.test(l.code);
+      return l.code !== code && nearestParent(codes, l.code) === code && !/-XXX$/.test(l.code);
     });
   }
 
@@ -631,7 +651,7 @@ var Core = (function () {
       code: code,
       notiType: leak ? (impacts.indexOf('SAFETY') >= 0 ? 'AY' : 'AR') : notMachine ? 'AR' : 'BM',
       priority: impacts.length ? 'High' : 'Medium',
-      shortText: code + trimWords(job.Title, max - code.length),
+      shortText: code + sapName(job, max - code.length),
       location: location,
       equipmentId: notMachine ? '' : equipmentId,
       description: [text(job.Detail), text(job.LocationDetail) ? 'ตรงไหน: ' + text(job.LocationDetail) : '', 'จากระบบแจ้งซ่อม ' + job.JobID]
@@ -640,6 +660,19 @@ var Core = (function () {
       leakType: leakType,
       unsure: unsure,
     };
+  }
+
+  // ชื่องานหลังรหัส = อะไรเสีย + อาการ (มาตรฐานโรงงาน: อาการอยู่ท้าย) · ยาวเกินให้ตัดชื่อเครื่องแทน อาการต้องอยู่ครบ
+  // job.Asset / job.SymptomLabel ไม่มี (งานเก่าหรือหน้าแอปรุ่นเก่า) หรืออาการยาวจนไม่เหลือที่ ใช้ชื่องานตัดทีละคำแบบเดิม
+  function sapName(job, room) {
+    var asset = text(job.Asset);
+    var symptom = text(job.SymptomLabel);
+    if (!asset || !symptom) return trimWords(job.Title, room);
+    var full = asset + ' ' + symptom;
+    if (full.length <= room) return full;
+    var assetRoom = room - symptom.length - 1;
+    if (assetRoom < 4) return trimWords(full, room);
+    return trimWords(asset, assetRoom) + ' ' + symptom;
   }
 
   // ตัดข้อความทีละคำให้ไม่เกิน max ตัว (ไม่ตัดกลางคำ สระและวรรณยุกต์ไทยไม่ขาด) คำแรกยาวเกินค่อยตัดตามจำนวนตัวอักษร
@@ -918,6 +951,7 @@ var Core = (function () {
     SAP_UNSURE: SAP_UNSURE,
     NO_EMAIL: NO_EMAIL,
     locationParent: locationParent,
+    locationParentIn: locationParentIn,
     locationChildren: locationChildren,
     equipmentAt: equipmentAt,
     equipmentLabel: equipmentLabel,

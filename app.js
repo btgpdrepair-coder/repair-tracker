@@ -643,7 +643,7 @@
   // ชื่อสั้นในรายการไล่ชั้น: ตัดชื่อตำแหน่งแม่ที่ซ้ำข้างหน้า เช่น "อาคารผลิตชั้น 2 โซนอัดเม็ด 1,2" ใต้ "อาคารผลิตชั้น 2" → "โซนอัดเม็ด 1,2"
   function locationShort(cat, code) {
     var name = locationName(cat, code);
-    var parent = Core.locationParent(code);
+    var parent = Core.locationParentIn(cat.locations, code);
     if (!parent) return name;
     var parentName = locationName(cat, parent);
     var cuts = [parentName, parentName.replace(/^พื้นที่/, '')];
@@ -655,6 +655,7 @@
 
   // เลือกตำแหน่ง: ที่แผนกแจ้งบ่อย · ค้นหา · ไล่ทีละชั้น (พื้นที่ › ชั้น › โซน/ห้อง)
   // state.areaCode = ตำแหน่งที่เลือก · state.browse = ชั้นที่กำลังดู · opts.frequent = รหัสที่แจ้งบ่อย · opts.onChange หลังเลือก
+  // opts.oldAreaName = ชื่อพื้นที่แบบเดิมของงานก่อนมีตำแหน่ง SAP (หน้าแก้งาน) แสดงแทนรหัส
   function locationPicker(body, cat, state, opts) {
     var chosen = el('div', 'pick-chosen');
     var frequent = el('div', 'chips');
@@ -674,7 +675,7 @@
     function choose(code) {
       state.areaCode = code;
       state.areaOther = '';
-      state.browse = Core.locationChildren(cat.locations, code).length ? code : Core.locationParent(code);
+      state.browse = Core.locationChildren(cat.locations, code).length ? code : Core.locationParentIn(cat.locations, code);
       search.value = '';
       if (opts.onChange) opts.onChange();
       draw();
@@ -703,7 +704,7 @@
       }
       var crumb = el('div', 'crumb');
       var path = [];
-      for (var c = state.browse; c; c = Core.locationParent(c)) path.unshift(c);
+      for (var c = state.browse; c; c = Core.locationParentIn(cat.locations, c)) path.unshift(c);
       [''].concat(path).forEach(function (code, i) {
         if (i) crumb.appendChild(document.createTextNode(' › '));
         var link = el('button', 'link', code ? locationShort(cat, code) : 'ทั้งโรงงาน');
@@ -722,7 +723,10 @@
 
     function draw() {
       chosen.innerHTML = '';
-      if (state.areaCode) {
+      var isSap = cat.locations.some(function (l) { return l.code === state.areaCode; });
+      if (state.areaCode && !isSap) {
+        chosen.appendChild(el('p', 'notice', 'พื้นที่เดิม: ' + (opts.oldAreaName || state.areaCode) + ' · เลือกตำแหน่งใหม่ได้ ไม่เลือกก็ใช้พื้นที่เดิม'));
+      } else if (state.areaCode) {
         chosen.appendChild(el('p', 'notice', 'เลือกแล้ว: ' + locationName(cat, state.areaCode)));
         if (Core.locationChildren(cat.locations, state.areaCode).length) {
           chosen.appendChild(el('small', 'muted', 'เลือกให้ละเอียดขึ้นได้ หรือกดถัดไปถ้าไม่แน่ใจโซน'));
@@ -784,12 +788,16 @@
       }
       var chosen = cat.equipment.filter(function (e) { return e.id === state.equipmentId; })[0];
       if (chosen && pool.indexOf(chosen) < 0 && !typed) pool = [chosen].concat(pool);
+      // ชื่อซ้ำกันในรายการ (เช่น Cooler 3 สองเครื่องในโซนเดียวกัน) แสดงเลขเครื่องให้แยกออก
+      var seen = {};
+      pool.forEach(function (e) { var k = Core.equipmentLabel(e); seen[k] = (seen[k] || 0) + 1; });
       pool.slice(0, 7).forEach(function (e) {
         var row = el('button', 'pick-row stack');
         row.type = 'button';
         row.setAttribute('aria-pressed', String(e.id === state.equipmentId));
         row.appendChild(el('span', '', Core.equipmentLabel(e)));
-        var sub = [e.localName ? 'SAP: ' + e.name : '', elsewhere || e.location.indexOf(state.areaCode) !== 0 ? locationName(cat, e.location) : '']
+        var sub = [e.localName ? 'SAP: ' + e.name : '', seen[Core.equipmentLabel(e)] > 1 ? 'เลขเครื่อง ' + e.id : '',
+          elsewhere || e.location.indexOf(state.areaCode) !== 0 ? locationName(cat, e.location) : '']
           .filter(Boolean).join(' · ');
         if (sub) row.appendChild(el('small', 'muted', sub));
         row.addEventListener('click', function () { set(e.id); });
@@ -1159,7 +1167,8 @@
           if (has && !draft.sapShortText) {
             draft.sapShortText = sapMode
               // ใบงาน 31: ชื่องาน SAP พร้อมรหัส XX.YY.ZZ. (งานรั่วยังไม่รู้ประเภท ได้ ?? ให้แก้เอง)
-              ? Core.sapDraft({ Title: value.title, SymptomCode: draft.symptomCode, EquipmentID: draft.equipmentId, AreaCode: draft.areaCode },
+              ? Core.sapDraft({ Title: value.title, Asset: value.asset, SymptomLabel: value.symptomLabel, SymptomCode: draft.symptomCode,
+                EquipmentID: draft.equipmentId, AreaCode: draft.areaCode },
                 { impacts: draft.impacts, reporterRole: me.role, config: { SAP_SHORTTEXT_MAX: options.noti.sapMax } }).shortText
               : Core.sapShortText(value.title, value.areaName, value.locationDetail, { SAP_SHORTTEXT_MAX: options.noti.sapMax });
             sap.value = draft.sapShortText;
@@ -1823,7 +1832,7 @@
         if (options.sap) {
           state.equipmentId = job.equipmentId;
           state.assetTyping = !job.equipmentId || job.equipmentId === Core.NOT_MACHINE;
-          state.browse = Core.locationParent(job.areaCode);
+          state.browse = Core.locationParentIn(options.sap.locations, job.areaCode);
         }
         renderEditJob(me, data, options, state, nav);
       })
@@ -1850,6 +1859,7 @@
     var showTitle = function () { title.textContent = 'ชื่องาน: ' + (check().value.title || '-'); };
     if (options.sap) {
       locationPicker(group(form, 'area', 'ตำแหน่ง *'), options.sap, state, {
+        oldAreaName: job.areaName,
         onChange: function () {
           var still = Core.equipmentAt(options.sap.equipment, state.areaCode).some(function (e) { return e.id === state.equipmentId; });
           if (state.equipmentId && state.equipmentId !== Core.NOT_MACHINE && !still) {
@@ -2164,7 +2174,7 @@
       line.parentNode.insertBefore(box, line.nextSibling);
       loadSapCatalog().then(function (catalog) {
         box.innerHTML = '';
-        var temp = { areaCode: state.location, browse: Core.locationParent(state.location), equipmentId: state.equipmentId, asset: '' };
+        var temp = { areaCode: state.location, browse: Core.locationParentIn(catalog.locations, state.location), equipmentId: state.equipmentId, asset: '' };
         if (kind === 'loc') {
           locationPicker(box, catalog, temp, { onChange: function () { state.location = temp.areaCode; } });
         } else {

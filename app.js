@@ -3057,7 +3057,8 @@
     }
     if (page === 'new') {
       if (Core.REPORTER_ROLES.indexOf(me.role) >= 0) return showNewJob(me);
-      return showError('โรลของคุณแจ้งงานไม่ได้ ติดต่อแอดมินถ้าต้องการแจ้งงาน');
+      // บอกทางไปต่อ คนที่สแกนป้าย QR หน้างานจะได้ไม่คิดว่าป้ายเสีย
+      return showError('ช่าง Planner หัวหน้าแผนก และ ผอ. แจ้งงานในระบบไม่ได้ ให้บอกพนักงานหรือหัวหน้ากะในโซนนี้แจ้งแทน');
     }
     if (page === 'my') return showMyJobs(me);
     if (page === 'job') return showJob(me, params.get('id'));

@@ -641,6 +641,24 @@ var Core = (function () {
     return (equipment || []).filter(function (e) { return e.location === code || e.location.indexOf(code + '-') === 0; });
   }
 
+  // ---------- ป้าย QR แจ้งซ่อม (ใบงาน 31 หัวข้อ "QR แจ้งซ่อม") ----------
+  // ป้ายมีแค่รหัสตำแหน่ง (?page=new&loc=รหัส) ชื่อหาจากชีต Locations ตอนสแกน แก้ชื่อในชีตแล้วป้ายเดิมยังใช้ได้
+
+  // ตำแหน่งจากรหัสบนป้าย · รหัสที่ไม่อยู่ในชีตแล้ว (ลบหรือเปลี่ยนรหัส) คืน null ให้ผู้แจ้งเลือกเอง
+  function qrLocation(locations, code) {
+    var wanted = text(code);
+    if (!wanted) return null;
+    return (locations || []).filter(function (l) { return l.code === wanted; })[0] || null;
+  }
+
+  // ใครใช้ป้าย QR ได้ (Config QR_REPORT): ADMIN = ลองเฉพาะแอดมิน (ค่าเริ่มต้น) · ALL = ทุกคนที่แจ้งงานได้ · OFF = ปิด
+  function qrReportAllowed(config, user) {
+    var mode = text((config || {}).QR_REPORT).toUpperCase();
+    if (mode === 'ALL') return true;
+    if (mode === 'OFF') return false;
+    return Boolean(user) && user.Role === 'ADMIN';
+  }
+
   // ชื่อเครื่องที่แสดง: ชื่อเรียกภาษาไทยก่อน ไม่มีใช้ชื่อ SAP (ตัด "A+_" ที่นำหน้าชื่อเครื่องหลักออก)
   function equipmentLabel(machine) {
     return text(machine.localName) || text(machine.name).replace(/^A\+_/, '');
@@ -1006,6 +1024,8 @@ var Core = (function () {
     locationChildren: locationChildren,
     equipmentAt: equipmentAt,
     equipmentLabel: equipmentLabel,
+    qrLocation: qrLocation,
+    qrReportAllowed: qrReportAllowed,
     sapDraft: sapDraft,
     sapDate: sapDate,
     formatNoti: formatNoti,

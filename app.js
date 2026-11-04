@@ -1033,6 +1033,13 @@
         clearDraft(me);
         // เริ่มว่างทุกครั้ง ไม่เติมพื้นที่ของงานก่อน · รหัสคำขอใหม่ต่อการแจ้ง 1 ครั้ง กดส่งซ้ำตอนเน็ตหลุดไม่เกิดงานซ้ำ
         var draft = { clientRequestId: newRequestId(), photos: [], impacts: [], areaCode: '', areaOther: '' };
+        // ป้าย QR: ลิงก์ ?loc=รหัสตำแหน่ง เติมตำแหน่งให้ (เฉพาะคนที่ Config QR_REPORT เปิดให้ และมีรายการตำแหน่ง SAP แล้ว)
+        var qrCode = new URLSearchParams(window.location.search).get('loc');
+        if (qrCode && res.data.sap && res.data.qrReport) {
+          var spot = Core.qrLocation(res.data.sap.locations, qrCode);
+          draft.qr = { code: qrCode, found: Boolean(spot) };
+          if (spot) draft.areaCode = spot.code;
+        }
         showReportStep(me, res.data, draft, 1);
       })
       .catch(function () { showError('โหลดหน้าแจ้งงานไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
@@ -1109,7 +1116,22 @@
 
     if (step === whereStep) {
       form.appendChild(el('h1', '', 'อยู่ที่ไหน'));
-      if (sapMode) {
+      var fromQr = sapMode && draft.qr && draft.qr.found && !draft.qr.manual;
+      if (fromQr) {
+        // สแกนป้ายโซนมา: แสดงตำแหน่งจากป้าย ไม่ต้องเลือก · กด "ไม่ใช่ที่นี่" แล้วเลือกเองแบบเดิม
+        var qrBox = group(form, 'area', 'ตำแหน่ง *');
+        qrBox.appendChild(el('p', 'notice', 'จากป้าย QR: ' + locationName(options.sap, draft.areaCode)));
+        qrBox.appendChild(actionButton('small', 'ไม่ใช่ที่นี่? เลือกเอง', function () {
+          draft.qr.manual = true;
+          draft.areaCode = '';
+          draft.equipmentId = '';
+          draft.asset = '';
+          rerender();
+        }));
+      } else if (sapMode) {
+        if (draft.qr && !draft.qr.found) {
+          form.appendChild(el('p', 'warning', 'ป้ายนี้ไม่มีในรายการตำแหน่งแล้ว (รหัส ' + draft.qr.code + ') เลือกตำแหน่งเอง และแจ้งแอดมินให้เปลี่ยนป้าย'));
+        }
         locationPicker(group(form, 'area', 'ตำแหน่ง *'), options.sap, draft, {
           frequent: options.frequentLocations || [],
           onChange: function () {

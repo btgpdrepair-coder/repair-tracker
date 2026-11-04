@@ -1961,14 +1961,14 @@
   }
 
   // values = { notiNo, sapShortText, sap } ค่าที่กรอกไว้ (กลับมาแก้จากหน้ายืนยันแล้วไม่หาย)
-  // values.sap (ใบงาน 31) = สิ่งที่หัวหน้ากะเปลี่ยนในข้อมูล SAP { location, equipmentId, leakType, checked, edited }
+  // values.sap (ใบงาน 31) = สิ่งที่หัวหน้ากะเปลี่ยนในข้อมูล SAP { location, equipmentId, leakType, notiType, checked, edited }
   function showNotiForm(me, data, nav, notice, values, fields) {
     var job = data.job;
     var noti = data.noti;
     if (!values) {
       values = { notiNo: '', sapShortText: noti.sapDefault };
       if (noti.sap) {
-        values.sap = { location: noti.sap.draft.location, equipmentId: noti.sap.input.job.EquipmentID, leakType: '', checked: {}, edited: false };
+        values.sap = { location: noti.sap.draft.location, equipmentId: noti.sap.input.job.EquipmentID, leakType: '', notiType: '', checked: {}, edited: false };
         values.sapShortText = noti.sap.draft.shortText;
       }
     }
@@ -2075,8 +2075,8 @@
   function sapDraftNow(noti, state) {
     var input = noti.sap.input;
     return Core.sapDraft(input.job, {
-      impacts: input.impacts, reporterRole: input.reporterRole, config: input.config,
-      locationCode: state.location, equipmentId: state.equipmentId, leakType: state.leakType,
+      impacts: input.impacts, reporterRole: input.reporterRole, config: input.config, today: input.today,
+      locationCode: state.location, equipmentId: state.equipmentId, leakType: state.leakType, notiType: state.notiType,
     });
   }
 
@@ -2156,11 +2156,24 @@
 
     sapRow('รหัส', d.code, null, false, 'mono');
     sapRow('Notification type', d.notiType, d.notiType, !ready);
+    // งานเครื่องจักร: เริ่มที่ AR เปลี่ยนเป็น BM ได้ (ระบบเก็บประเภทที่เลือกพร้อมชื่อคนเปิด Noti)
+    if (d.notiTypeChoices.length) {
+      var types = el('div', 'chips');
+      d.notiTypeChoices.forEach(function (type) {
+        var chip = el('button', 'chip', type);
+        chip.type = 'button';
+        chip.setAttribute('aria-pressed', String(d.notiType === type));
+        chip.addEventListener('click', function () { state.notiType = type; onChange(); });
+        types.appendChild(chip);
+      });
+      card.appendChild(types);
+    }
     sapRow('Functional loc.', d.location ? d.location + '\n' + locName : '- (ยังไม่เลือก)', d.location, false, '', 'loc');
     sapRow('Equipment', eqText, d.equipmentId, false, '', 'eq');
     sapRow('Priority', d.priority + (d.priority === 'High' ? ' (มีผลกระทบ)' : ' (ไม่กระทบ)'), d.priority, false);
+    if (d.requiredEnd) sapRow('Required End', d.requiredEnd + ' (' + d.requiredEndDays + ' วัน)', d.requiredEnd, false);
     sapRow('Description', d.description, d.description, false);
-    card.appendChild(el('small', 'muted', 'ชื่องาน (Short text) อยู่ในช่องด้านล่าง · Required End, Reported By, Requester E-Mail กรอกใน SAP เอง'));
+    card.appendChild(el('small', 'muted', 'ชื่องาน (Short text) อยู่ในช่องด้านล่าง · Reported By, Requester E-Mail กรอกใน SAP เอง'));
     return card;
 
     function sapRow(name, value, copy, locked, cls, change) {

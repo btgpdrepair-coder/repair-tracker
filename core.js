@@ -646,9 +646,22 @@ var Core = (function () {
     return text(machine.localName) || text(machine.name).replace(/^A\+_/, '');
   }
 
+  // Priority และ Required End ใน SAP ดูแค่ผลกระทบตอนเปิด Noti ไม่แก้ตามผลประเมินทีหลัง (เจ้าของตกลง 4 พ.ย. 2026)
+  // ระดับความเร่งด่วนใช้เร่งงานในระบบเราเท่านั้น
+  var SAP_REQUIRED_END_DAYS = { High: 3, Medium: 7 };
+  // ประเภท Noti ของงานเครื่องจักร: ค่าเริ่มต้น AR (หน้างานใช้ส่วนใหญ่) หัวหน้ากะเปลี่ยนเป็น BM ได้
+  var MACHINE_NOTI_TYPES = ['AR', 'BM'];
+
+  // วันที่ YYYY-MM-DD เป็นรูปแบบที่ SAP ใช้ DD.MM.YYYY
+  function sapDate(date) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+    return m ? m[3] + '.' + m[2] + '.' + m[1] : '';
+  }
+
   // ร่างข้อมูล Noti จากงาน ให้หัวหน้ากะตรวจแล้วคัดลอกไป SAP
-  // opts: { impacts (รหัสผลกระทบ ไม่รวม NONE), reporterRole, leakType, locationCode, equipmentId, config }
-  //   locationCode/equipmentId ส่งมาเมื่อหัวหน้ากะเปลี่ยน ไม่ส่งใช้ของงาน
+  // opts: { impacts (รหัสผลกระทบ ไม่รวม NONE), reporterRole, leakType, locationCode, equipmentId, notiType, config, today }
+  //   locationCode/equipmentId ส่งมาเมื่อหัวหน้ากะเปลี่ยน ไม่ส่งใช้ของงาน · today = วันเปิด Noti (YYYY-MM-DD) ใช้นับ Required End
+  //   งานเครื่องจักรเริ่มที่ AR หัวหน้ากะเปลี่ยนเป็น BM เองได้ (opts.notiType) · งานรั่วและงานที่ไม่ใช่เครื่องจักรระบบเลือกเอง (เจ้าของตกลง 4 พ.ย. 2026)
   function sapDraft(job, opts) {
     opts = opts || {};
     var config = opts.config || {};
@@ -673,10 +686,15 @@ var Core = (function () {
       unsure.push('NO_LOCATION');
     }
     var code = xx + '.' + yy + '.' + zz + '.';
+    var priority = impacts.length ? 'High' : 'Medium';
+    var machine = !leak && !notMachine;
     return {
       code: code,
-      notiType: leak ? (impacts.indexOf('SAFETY') >= 0 ? 'AY' : 'AR') : notMachine ? 'AR' : 'BM',
-      priority: impacts.length ? 'High' : 'Medium',
+      notiType: leak ? (impacts.indexOf('SAFETY') >= 0 ? 'AY' : 'AR') : machine && opts.notiType === 'BM' ? 'BM' : 'AR',
+      notiTypeChoices: machine ? MACHINE_NOTI_TYPES : [],
+      priority: priority,
+      requiredEndDays: SAP_REQUIRED_END_DAYS[priority],
+      requiredEnd: opts.today ? sapDate(addDays(opts.today, SAP_REQUIRED_END_DAYS[priority])) : '',
       shortText: code + sapName(job, max - code.length),
       location: location,
       equipmentId: notMachine ? '' : equipmentId,
@@ -989,6 +1007,7 @@ var Core = (function () {
     equipmentAt: equipmentAt,
     equipmentLabel: equipmentLabel,
     sapDraft: sapDraft,
+    sapDate: sapDate,
     formatNoti: formatNoti,
     NOTE_MAX: NOTE_MAX,
     validateAfterRepair: validateAfterRepair,

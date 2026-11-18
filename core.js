@@ -39,6 +39,11 @@ var Core = (function () {
     NOT_FOUND: 'NOT_FOUND',
     ALREADY_REGISTERED: 'ALREADY_REGISTERED',
     INTERNAL: 'INTERNAL',
+    // sap-helper 12: คำขอจากโปรแกรมบนคอม
+    PC_KEY_INVALID: 'PC_KEY_INVALID',
+    PC_DISABLED: 'PC_DISABLED',
+    PAIR_CODE_EXPIRED: 'PAIR_CODE_EXPIRED',
+    PAIR_CODE_USED: 'PAIR_CODE_USED',
   };
 
   // ข้อความภาษาไทยของแต่ละ error ที่หน้าจอแสดงได้เลย
@@ -55,6 +60,10 @@ var Core = (function () {
     NOT_FOUND: 'ไม่พบข้อมูล',
     ALREADY_REGISTERED: 'คุณลงทะเบียนไว้แล้ว',
     INTERNAL: 'ระบบขัดข้อง กรุณาลองใหม่',
+    PC_KEY_INVALID: 'กุญแจคอมใช้ไม่ได้ ให้แอดมินผูกคอมนี้ใหม่',
+    PC_DISABLED: 'คอมนี้ถูกปิดใช้ ให้แอดมินผูกคอมนี้ใหม่',
+    PAIR_CODE_EXPIRED: 'QR นี้หมดอายุแล้ว ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรมบนคอม แล้วสแกนใหม่',
+    PAIR_CODE_USED: 'QR นี้ถูกใช้ผูกคอมไปแล้ว ถ้าคอมยังไม่ได้ผูก ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรม',
   };
 
   // แปลงสถานะผู้ใช้ที่ยังไม่อนุมัติเป็น error code ที่ใช้ปฏิเสธคำขอ

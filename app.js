@@ -103,6 +103,7 @@
     my: ['listMyJobs'],
     new: ['reportOptions'],
     users: ['listUsers'],
+    devices: ['listDevices'],
     all: ['listJobs', { view: 'all' }],
     'queue-noti': ['listJobs', { view: 'noti' }],
     'queue-close': ['listJobs', { view: 'close' }],
@@ -346,7 +347,10 @@
       qrButton.addEventListener('click', function () { showFriendQr(function () { showUsers(me); }); });
       var reload = el('button', 'small', 'โหลดใหม่');
       reload.addEventListener('click', function () { showUsers(me); });
+      var devices = el('button', 'small', 'คอมที่ผูก');
+      devices.addEventListener('click', function () { showDevices(me); });
       tools.appendChild(qrButton);
+      tools.appendChild(devices);
       tools.appendChild(reload);
       main.appendChild(tools);
 
@@ -493,6 +497,144 @@
           control.disabled = false;
         });
     }
+  }
+
+  // ---------- ผูกคอม (sap-helper 12) ----------
+
+  // หน้ายืนยันผูกคอม: แอดมินสแกน QR บนหน้าต่างโปรแกรม "เปิด Noti" ที่คอมกลาง (ลิงก์ ?page=pair-pc&code=)
+  function showPairPc(me, code) {
+    var main = screen('ผูกคอม');
+    main.appendChild(el('p', 'muted', 'กำลังโหลด…'));
+    api('pcPairInfo', { code: code })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        var info = res.data;
+        main.innerHTML = '';
+        var card = el('section', 'card');
+        main.appendChild(card);
+        if (info.state === 'EXPIRED') {
+          card.appendChild(el('h1', '', 'QR หมดอายุแล้ว'));
+          card.appendChild(el('p', 'muted', 'QR ผูกคอมใช้ได้ 10 นาที ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรมบนคอม แล้วสแกนอีกครั้ง'));
+          return;
+        }
+        if (info.state === 'USED') {
+          card.appendChild(el('h1', '', 'QR นี้ใช้ผูกคอมไปแล้ว'));
+          card.appendChild(el('p', 'muted', 'ดูได้ที่หน้าคอมที่ผูก ถ้าคอมยังไม่ได้ผูก ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรม'));
+          card.appendChild(devicesButton());
+          return;
+        }
+        card.appendChild(el('h1', '', 'ผูกคอมเครื่องนี้กับระบบ?'));
+        card.appendChild(row('ชื่อคอม', el('strong', '', info.pcName)));
+        card.appendChild(row('บัญชี Windows', el('strong', '', info.winUser)));
+        card.appendChild(row('รุ่นโปรแกรม', el('strong', '', info.version || '-')));
+        if (info.replaces) {
+          card.appendChild(el('p', 'warning', '⚠️ คอมนี้บัญชีนี้เคยผูกไว้แล้ว ผูกใหม่แล้วกุญแจเดิมจะใช้ไม่ได้ (ใช้ตอนติดตั้งใหม่หรือกุญแจหาย)'));
+        }
+        card.appendChild(el('p', 'notice', 'ตรวจว่าชื่อคอมและบัญชี Windows ตรงกับที่หน้าต่างโปรแกรมบนคอมแสดง · หลังผูก คอมนี้ (เฉพาะบัญชี Windows นี้) ดึงรายการงานได้ · ปิดใช้ได้ทุกเมื่อในหน้าคอมที่ผูก'));
+        var confirm = el('button', 'primary', 'ผูกคอม');
+        var cancel = el('button', '', 'ไม่ใช่ ไม่ผูก');
+        confirm.addEventListener('click', function () {
+          confirm.disabled = true;
+          cancel.disabled = true;
+          api('confirmPcPair', { code: code })
+            .then(function (done) {
+              if (!done.ok) return showError(done.error.message);
+              showPairPcDone(done.data);
+            })
+            .catch(function () {
+              window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
+              confirm.disabled = false;
+              cancel.disabled = false;
+            });
+        });
+        cancel.addEventListener('click', function () {
+          showStatus(me, 'ไม่ได้ผูกคอม · QR นี้หมดอายุเองใน 10 นาที');
+        });
+        card.appendChild(confirm);
+        card.appendChild(cancel);
+      })
+      .catch(function () { showError('โหลดข้อมูล QR ไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+
+    function showPairPcDone(data) {
+      var doneMain = screen('ผูกคอม');
+      var card = el('section', 'card done');
+      card.appendChild(el('div', 'done-mark', '✓'));
+      card.appendChild(el('h1', '', 'ผูกคอมแล้ว'));
+      card.appendChild(el('p', '', data.pcName + ' · บัญชี ' + data.winUser));
+      card.appendChild(el('p', 'muted', 'หน้าต่างโปรแกรมบนคอมจะเปลี่ยนเองภายในไม่กี่วินาที'));
+      card.appendChild(devicesButton());
+      doneMain.appendChild(card);
+    }
+
+    function devicesButton() {
+      var button = el('button', '', 'ดูคอมที่ผูก');
+      button.addEventListener('click', function () { showDevices(me); });
+      return button;
+    }
+  }
+
+  // หน้าคอมที่ผูก (แอดมิน): ชื่อคอม · บัญชี Windows · รุ่น · ใช้ล่าสุด · ปิดใช้ได้ทันที
+  function showDevices(me) {
+    var main = screen('คอมที่ผูก');
+    main.appendChild(el('p', 'muted', 'กำลังโหลดรายการคอม…'));
+    api('listDevices').then(function (res) {
+      main.innerHTML = '';
+      if (!res.ok) return showError(res.error.message);
+      var devices = res.data.devices;
+      var active = devices.filter(function (d) { return !d.disabled; });
+
+      var tools = el('div', 'toolbar');
+      var users = el('button', 'small', 'จัดการผู้ใช้');
+      users.addEventListener('click', function () { showUsers(me); });
+      var reload = el('button', 'small', 'โหลดใหม่');
+      reload.addEventListener('click', function () { showDevices(me); });
+      tools.appendChild(users);
+      tools.appendChild(reload);
+      main.appendChild(tools);
+
+      var card = el('section', 'card');
+      card.appendChild(el('h1', '', 'คอมที่ใช้อยู่ ' + active.length + ' เครื่อง'));
+      card.appendChild(el('p', 'notice', 'ผูกคอมใหม่: เปิดโปรแกรม "เปิด Noti" บนคอมนั้นด้วยบัญชี Windows ของคนที่จะใช้ แล้วสแกน QR ที่ขึ้นด้วยกล้องมือถือหรือกล้องใน LINE'));
+      if (!devices.length) card.appendChild(el('p', 'muted', 'ยังไม่มีคอมที่ผูก'));
+      devices.forEach(function (d) {
+        var item = el('div', 'person');
+        var info = el('div', 'person-info');
+        info.appendChild(el('strong', '', d.pcName + ' · ' + d.winUser));
+        var used = d.lastUsedAt ? 'ใช้ล่าสุด ' + shortTime(d.lastUsedAt) : 'ยังไม่เคยใช้';
+        info.appendChild(el('small', 'muted', used + (d.lastSapUser ? ' · ' + d.lastSapUser : '') + ' · รุ่น ' + (d.lastVersion || '-')));
+        if (d.disabled) {
+          info.appendChild(el('small', 'muted', 'ปิดใช้ ' + shortTime(d.disabledAt) + (d.disabledBy ? ' โดย ' + d.disabledBy : '')));
+        } else {
+          info.appendChild(el('small', 'muted', 'ผูก ' + shortTime(d.pairedAt) + (d.pairedBy ? ' โดย ' + d.pairedBy : '')));
+        }
+        item.appendChild(info);
+        var actions = el('div', 'person-actions');
+        if (d.disabled) {
+          actions.appendChild(badge('ปิดใช้แล้ว', 'err'));
+        } else {
+          var off = el('button', 'small', 'ปิดใช้');
+          off.addEventListener('click', function () {
+            if (!window.confirm('ปิดใช้ ' + d.pcName + ' · ' + d.winUser + '?\nโปรแกรมบนคอมนี้จะใช้ไม่ได้ทันที ต้องผูกใหม่ถึงจะใช้ได้อีก')) return;
+            off.disabled = true;
+            api('disableDevice', { deviceId: d.deviceId })
+              .then(function (r) {
+                if (!r.ok) window.alert(r.error.message);
+                showDevices(me);
+              })
+              .catch(function () {
+                window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
+                off.disabled = false;
+              });
+          });
+          actions.appendChild(off);
+        }
+        item.appendChild(actions);
+        card.appendChild(item);
+      });
+      main.appendChild(card);
+    }).catch(function () {
+      showError('โหลดรายการคอมไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
+    });
   }
 
   // ---------- เลือกหน้า ----------
@@ -3053,6 +3195,15 @@
     if (page === 'register') return showStatus(me, 'คุณลงทะเบียนและได้รับอนุมัติแล้ว');
     if (page === 'users') {
       if (me.role === 'ADMIN') return showUsers(me);
+      return showError('หน้านี้สำหรับแอดมินเท่านั้น');
+    }
+    // sap-helper 12: QR บนหน้าต่างโปรแกรม "เปิด Noti" ที่คอมยังไม่ได้ผูก
+    if (page === 'pair-pc') {
+      if (me.role === 'ADMIN') return showPairPc(me, params.get('code') || '');
+      return showError('QR นี้ใช้ผูกคอมกับระบบ ให้แอดมินเป็นคนสแกน');
+    }
+    if (page === 'devices') {
+      if (me.role === 'ADMIN') return showDevices(me);
       return showError('หน้านี้สำหรับแอดมินเท่านั้น');
     }
     if (page === 'new') {

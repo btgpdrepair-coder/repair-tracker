@@ -90,6 +90,13 @@ var Core = (function () {
   var EMAIL_MAX = 100;
   // ค่าในคอลัมน์ Email ของชีต Users เมื่อผู้ใช้ติ๊ก "ไม่มีอีเมล" (ว่าง = ยังไม่เคยถาม)
   var NO_EMAIL = 'ไม่มี';
+  var EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // อีเมลที่ใช้ได้จริงจากชีต Users ("ไม่มี" ว่าง หรือผิดรูปแบบคืน '')
+  function usableEmail(value) {
+    var email = text(value);
+    return email.length <= EMAIL_MAX && EMAIL_PATTERN.test(email) ? email : '';
+  }
 
   // แปลงเวลาเป็นข้อความเวลาไทย เช่น 2026-10-28 08:00:00 (ไทยไม่มีเวลาออมแสง จึงบวก 7 ชั่วโมงได้ตรง ๆ)
   function formatTime(date) {
@@ -138,7 +145,7 @@ var Core = (function () {
     else if (input.email !== undefined) {
       email = String(input.email == null ? '' : input.email).trim();
       if (!email) fields.email = 'กรุณากรอกอีเมล หรือติ๊ก "ไม่มีอีเมล"';
-      else if (email.length > EMAIL_MAX || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fields.email = 'รูปแบบอีเมลไม่ถูกต้อง';
+      else if (email.length > EMAIL_MAX || !EMAIL_PATTERN.test(email)) fields.email = 'รูปแบบอีเมลไม่ถูกต้อง';
     }
 
     return {
@@ -421,7 +428,8 @@ var Core = (function () {
 
   // ---------- ผลกระทบและการประเมินความเร่งด่วน (ใบงาน 27) ----------
   // เก็บในแถว StatusLog (ไม่เพิ่มคอลัมน์): IMPACT Note = "SAFETY,PRODUCTION" หรือ "NONE" (ติ๊กเพิ่มทีละด้าน) · IMPACT_REMOVE Note = ด้านที่เอาออก
-  // ASSESS Note = "DEPT:HIGH · หมายเหตุ" หรือ "SAFETY:URGENT · หมายเหตุ"
+  // ASSESS Note = "DEPT:HIGH · หมายเหตุ" · จป: "SAFETY:SERIOUS:PATROL · หมายเหตุ" (ระดับอันตราย:พบจาก · sap-helper 09)
+  //   แถวเก่าของ จป "SAFETY:URGENT · หมายเหตุ" (ระดับความเร่งด่วน) ยังอ่านได้
   // แก้ 4 พ.ย. 2026: หัวหน้าแผนกของงานประเมินครั้งเดียวครอบคลุมทุกด้าน (DEPT) · จป ประเมินเพิ่มเฉพาะงานความปลอดภัย (SAFETY)
   //   ระดับต่างกันใช้ระดับที่ด่วนกว่า · หัวหน้ากะ/หัวหน้าแผนกติ๊กเพิ่มหรือเอาออกได้ · ประเมินเก่า PRODUCTION/NCP นับเป็นของหัวหน้าแผนก
 
@@ -432,10 +440,49 @@ var Core = (function () {
   var LEVEL_ORDER = ['URGENT', 'HIGH', 'NORMAL', 'LOW'];
   // กำหนดแก้นับจากเวลาแจ้ง (วัน) ปรับใน Config · ไม่เร่งด่วนไม่มีกำหนด
   var LEVEL_DAYS = { URGENT: ['LEVEL_URGENT_DAYS', 1], HIGH: ['LEVEL_HIGH_DAYS', 3], NORMAL: ['LEVEL_NORMAL_DAYS', 7] };
-  var ASSESS_NOTE = /^([A-Z]+):([A-Z]+)(?: · ([\s\S]*))?$/;
-  // ผู้ประเมิน: หัวหน้าแผนกของงาน (ทุกด้าน) และ จป (เฉพาะความปลอดภัย)
+  // "ผู้ประเมิน:ระดับ[:พบจาก][+ประเมินแทน] · หมายเหตุ" (พบจากมีเฉพาะระดับอันตราย · sap-helper 09 · ประเมินแทน app-simplify 01)
+  // กลุ่ม: 1 ผู้ประเมิน · 2 ระดับ · 3 พบจาก · 4 ประเมินแทน (DEPT_HEAD / LEAD) · 5 หมายเหตุ
+  var ASSESS_NOTE = /^([A-Z]+):([A-Z]+)(?::([A-Z]+))?(?:\+([A-Z_]+))?(?: · ([\s\S]*))?$/;
+  // ผู้ประเมิน (app-simplify 01): หัวหน้าแผนก (การผลิตหรือ NCP · ระดับความเร่งด่วน) และ จป (ความปลอดภัย · ระดับอันตราย)
   var ASSESSOR = { DEPT: 'หัวหน้าแผนก', SAFETY: 'จป' };
+  // ประเมินแทน: หัวหน้าแผนกของงานแทน จป ได้ทันที (N12) · หัวหน้ากะของแผนกงานแทนได้ทั้งสองเมื่องานรอเกิน LEAD_ASSESS_HOURS (N13)
+  var ASSESS_PROXY = { DEPT_HEAD: 'หัวหน้าแผนก', LEAD: 'หัวหน้ากะ' };
+  var ASSESS_SELF = 'SELF';
   var IMPACT_REMOVE = 'IMPACT_REMOVE';
+
+  // sap-helper 09: จป ประเมินระดับอันตราย 5 ระดับ (แทนระดับความเร่งด่วน) · ระบบแปลงเป็นระดับความเร่งด่วนตาม Config
+  // "ไม่อันตราย" = ไม่ใช่งานความปลอดภัย: จดการประเมินแล้วเอาผลกระทบความปลอดภัยออก (ไม่แปลงเป็นระดับ)
+  // ชื่อที่แสดงเป็นภาษาอังกฤษตามที่เจ้าของเลือก (19 พ.ย. 2026) ไม่มีคำอธิบายใต้ระดับ · รหัสข้างในคงเดิม
+  // (ห้ามเปลี่ยนรหัสเป็น HIGH/LOW เพราะชนกับรหัสความเร่งด่วนในแถว ASSESS เก่าของ จป เช่น "SAFETY:HIGH")
+  var HAZARD = { CRITICAL: 'Critical', SERIOUS: 'High', MODERATE: 'Medium', MINOR: 'Low', NONE: 'ไม่อันตราย' };
+  var HAZARD_ORDER = ['CRITICAL', 'SERIOUS', 'MODERATE', 'MINOR', 'NONE'];
+  var HAZARD_NONE = 'NONE';
+  // ระดับอันตราย → [ชื่อค่าใน Config, ระดับความเร่งด่วนเริ่มต้น]
+  var HAZARD_LEVEL = {
+    CRITICAL: ['HAZARD_CRITICAL_LEVEL', 'URGENT'],
+    SERIOUS: ['HAZARD_SERIOUS_LEVEL', 'HIGH'],
+    MODERATE: ['HAZARD_MODERATE_LEVEL', 'NORMAL'],
+    MINOR: ['HAZARD_MINOR_LEVEL', 'LOW'],
+  };
+  // พบจาก: งานทั่วไปเป็นค่าเริ่มต้น · ค่าอื่นทำให้ชื่องาน SAP ใช้กลุ่ม SE ประเภท AY (sapDraft · sap-helper 11)
+  var FOUND_FROM = { GENERAL: 'งานทั่วไป', PATROL: 'Safety Patrol', COMMITTEE: 'คปอ.', PSM: 'PSM', ENV: 'Safety Environment' };
+  var FOUND_FROM_ORDER = ['GENERAL', 'PATROL', 'COMMITTEE', 'PSM', 'ENV'];
+  var FOUND_FROM_GENERAL = 'GENERAL';
+
+  // ระดับความเร่งด่วนของระดับอันตราย ตาม Config (ว่างหรือพิมพ์ผิดใช้ค่าเริ่มต้น) · ไม่อันตรายหรือไม่รู้จักคืน ''
+  function hazardLevel(hazard, config) {
+    var map = HAZARD_LEVEL[hazard];
+    if (!map) return '';
+    var raw = String((config || {})[map[0]] == null ? '' : config[map[0]]).trim().toUpperCase();
+    return LEVEL[raw] ? raw : map[1];
+  }
+
+  // ตารางแปลงทุกระดับ (ยกเว้นไม่อันตราย) { CRITICAL: 'URGENT', ... } ให้หน้าประเมินบอก "นับเป็น" ตาม Config
+  function hazardLevels(config) {
+    var out = {};
+    Object.keys(HAZARD_LEVEL).forEach(function (h) { out[h] = hazardLevel(h, config); });
+    return out;
+  }
 
   // ผลกระทบที่ผู้แจ้งเลือก ต้องมีอย่างน้อย 1 · "ไม่กระทบ" เลือกเดี่ยว คืน { ok, message, value }
   function validateImpacts(value) {
@@ -448,14 +495,64 @@ var Core = (function () {
     return { ok: !message, message: message, value: codes };
   }
 
-  // ผู้ใช้คนนี้ประเมินในฐานะ assessor (DEPT / SAFETY) ให้งานนี้ได้ไหม: หัวหน้าแผนกของงาน · จป · แอดมินแทนได้ทุกแบบ
-  // จป ประเมินแทนหัวหน้าแผนกสำหรับงานแผนกตัวเอง (SHE ไม่มีหัวหน้าแผนก · เจ้าของตัดสิน 4 พ.ย. 2026)
-  function canAssess(user, assessor, job) {
-    if (!user || !ASSESSOR[assessor]) return false;
-    if (user.Role === 'ADMIN') return true;
-    if (assessor === 'SAFETY') return user.Role === 'SAFETY';
-    var sameDept = Boolean(job) && text(user.Department) === text(job.Department);
-    return (user.Role === 'DEPT_HEAD' || user.Role === 'SAFETY') && sameDept;
+  // ผู้ใช้คนนี้ประเมินในฐานะ assessor (DEPT / SAFETY) ให้งานนี้ได้ในฐานะอะไร (app-simplify 01):
+  //   SELF = ผู้ประเมินตัวจริง: จป (ระดับอันตรายทุกแผนก · ความเร่งด่วนแผนกตัวเอง เพราะ SHE ไม่มีหัวหน้าแผนก) · หัวหน้าแผนกของงาน (ความเร่งด่วน) · แอดมิน
+  //   DEPT_HEAD = หัวหน้าแผนกของงานแทน จป ได้ทันที · LEAD = หัวหน้ากะของแผนกงานแทนได้ทั้งสอง เมื่อแจ้งมาครบ LEAD_ASSESS_HOURS (ค่าเริ่มต้น 24)
+  //   '' = ไม่มีสิทธิ์
+  // คนที่ประเมินแทนทับผลของผู้ประเมินตัวจริงไม่ได้: ประเมินแทนได้เฉพาะช่องที่ยังไม่มีผล หรือผลเดิมเป็นของคนที่ประเมินแทน
+  //   ลำดับ ผู้ประเมินตัวจริง > หัวหน้าแผนกแทน > หัวหน้ากะแทน: หัวหน้ากะทับได้แค่ผลของหัวหน้ากะ · หัวหน้าแผนกทับผลของหัวหน้ากะได้
+  // info = impactInfo ของงาน (ไม่ส่ง = ถือว่ายังไม่มีผล) · now = เวลาไทย ใช้ตัดสินว่าหัวหน้ากะถึงกำหนดหรือยัง
+  function assessRight(user, assessor, job, info, now, config) {
+    if (!user || !ASSESSOR[assessor] || !job) return '';
+    var role = user.Role;
+    if (role === 'ADMIN') return ASSESS_SELF;
+    var sameDept = text(user.Department) === text(job.Department);
+    if (assessor === 'SAFETY' && role === 'SAFETY') return ASSESS_SELF;
+    if (assessor === 'DEPT' && (role === 'DEPT_HEAD' || role === 'SAFETY') && sameDept) return ASSESS_SELF;
+    var proxy = '';
+    if (assessor === 'SAFETY' && role === 'DEPT_HEAD' && sameDept) proxy = 'DEPT_HEAD';
+    else if (role === 'LEAD' && sameDept && leadAssessDue(job, now, config)) proxy = 'LEAD';
+    if (!proxy) return '';
+    var current = info && info.assessments && info.assessments[assessor];
+    if (!current) return proxy;
+    return current.proxy === 'LEAD' || (current.proxy === 'DEPT_HEAD' && proxy === 'DEPT_HEAD') ? proxy : '';
+  }
+
+  function canAssess(user, assessor, job, info, now, config) {
+    return Boolean(assessRight(user, assessor, job, info, now, config));
+  }
+
+  // งานแจ้งมากี่ชั่วโมงหัวหน้ากะถึงประเมินแทนได้ (Config LEAD_ASSESS_HOURS · ค่าเริ่มต้น 24)
+  function leadAssessHours(config) {
+    return configNumber(config, 'LEAD_ASSESS_HOURS', 24);
+  }
+
+  // หัวหน้ากะประเมินแทนได้หรือยัง: เวลาแจ้ง + LEAD_ASSESS_HOURS ชั่วโมง (N13 · นับจากเวลาแจ้ง)
+  function leadAssessDue(job, now, config) {
+    var since = parseTime(job.CreatedAt);
+    var at = parseTime(now);
+    return since !== null && at !== null && at - since >= leadAssessHours(config) * 3600000;
+  }
+
+  // อ่านหมายเหตุแถว ASSESS เป็นช่องมีชื่อ (ที่เดียวที่รู้ลำดับกลุ่มของ ASSESS_NOTE · core metrics และหน้าแอปใช้ร่วมกัน)
+  // คืน { assessor, code, foundFrom, proxy, note } หรือ null · assessor แถวเก่า PRODUCTION/NCP (ก่อน 4 พ.ย. 2026) = DEPT
+  // code = ระดับอันตราย (จป แถวใหม่) หรือระดับความเร่งด่วน ตามที่จดไว้ · proxy ที่ไม่รู้จักคืน ''
+  function parseAssessNote(note) {
+    var m = ASSESS_NOTE.exec(String(note == null ? '' : note));
+    if (!m) return null;
+    return {
+      assessor: m[1] === 'PRODUCTION' || m[1] === 'NCP' ? 'DEPT' : m[1],
+      code: m[2],
+      foundFrom: m[3] || '',
+      proxy: ASSESS_PROXY[m[4]] ? m[4] : '',
+      note: m[5] || '',
+    };
+  }
+
+  // ชื่อผู้ประเมินในประวัติ: "หัวหน้าแผนก" · "หัวหน้าแผนก (แทน จป)" · "หัวหน้ากะ (แทนหัวหน้าแผนก)"
+  function assessorLabel(assessor, proxy) {
+    var real = ASSESSOR[assessor] || assessor;
+    return ASSESS_PROXY[proxy] ? ASSESS_PROXY[proxy] + ' (แทน' + (assessor === 'SAFETY' ? ' ' : '') + real + ')' : real;
   }
 
   // หัวหน้ากะ (แผนกตัวเอง รวม จป) และหัวหน้าแผนกของงาน ติ๊กผลกระทบเพิ่มหรือเอาออกได้ · จป ติ๊กเพิ่มความปลอดภัยได้ทุกแผนก
@@ -473,13 +570,18 @@ var Core = (function () {
     return t === null ? '' : new Date(t + hours * 3600000).toISOString().slice(0, 19).replace('T', ' ');
   }
 
-  // ผู้ประเมินที่งานนี้ต้องมี: หัวหน้าแผนกเมื่อมีผลกระทบด้านใดก็ได้ · จป เมื่อติ๊กความปลอดภัย
+  // ผู้ประเมินที่งานนี้ต้องมี (app-simplify 01 · N12.1): หัวหน้าแผนกเมื่อติ๊กการผลิตหรือ NCP · จป เมื่อติ๊กความปลอดภัย
+  // ความปลอดภัยอย่างเดียว = จป อย่างเดียว (เดิมหัวหน้าแผนกต้องประเมินทุกงานที่มีผลกระทบ)
   function assessorsFor(impacts) {
-    if (!impacts.length) return [];
-    return impacts.indexOf('SAFETY') >= 0 ? ['DEPT', 'SAFETY'] : ['DEPT'];
+    var out = [];
+    if (impacts.indexOf('PRODUCTION') >= 0 || impacts.indexOf('NCP') >= 0) out.push('DEPT');
+    if (impacts.indexOf('SAFETY') >= 0) out.push('SAFETY');
+    return out;
   }
 
-  // ผลกระทบของงานจากประวัติ { impacts, none, assessments: { DEPT|SAFETY: { level, note, at, byUserId } }, assessors, pending, level, deadline, late }
+  // ผลกระทบของงานจากประวัติ { impacts, none, assessments, assessors, pending, level, deadline, late }
+  // assessments: { DEPT|SAFETY: { level, hazard, foundFrom, proxy, note, at, byUserId } } · proxy = DEPT_HEAD / LEAD เมื่อประเมินแทน · level ของ จป แปลงจาก hazard ตาม Config
+  //   (แถวเก่า hazard ว่าง) · foundFrom มีเฉพาะ SAFETY · ไม่อันตรายเอาความปลอดภัยออกจากงานแล้ว จึงไม่อยู่ใน assessors
   // pending = ผู้ประเมินที่ยังไม่ประเมิน · level = ระดับที่ด่วนที่สุดในการประเมินที่ยังใช้อยู่
   // deadline = เวลาแจ้ง + วันของระดับนั้น · late = ยังไม่จบและเลยกำหนด
   function impactInfo(job, logs, now, config) {
@@ -492,16 +594,32 @@ var Core = (function () {
         if (l.Action === 'IMPACT') {
           String(l.Note || '').split(',').map(text).forEach(function (c) {
             if (c === IMPACT_NONE) none = !impacts.length;
-            else if (IMPACT[c] && impacts.indexOf(c) < 0) { impacts.push(c); none = false; }
+            else if (IMPACT[c] && impacts.indexOf(c) < 0) {
+              impacts.push(c);
+              none = false;
+              // ติ๊กความปลอดภัยกลับหลัง จป ประเมินว่าไม่อันตราย ต้องประเมินใหม่
+              if (c === 'SAFETY' && assessments.SAFETY && assessments.SAFETY.hazard === HAZARD_NONE) delete assessments.SAFETY;
+            }
           });
         } else if (l.Action === IMPACT_REMOVE) {
           impacts = impacts.filter(function (c) { return c !== text(l.Note); });
           if (!impacts.length) none = true;
         } else if (l.Action === 'ASSESS') {
-          var m = ASSESS_NOTE.exec(String(l.Note || ''));
-          // ประเมินเก่า (ก่อน 4 พ.ย. 2026) ด้านการผลิต/NCP เป็นของหัวหน้าแผนก
-          var key = m && (m[1] === 'PRODUCTION' || m[1] === 'NCP') ? 'DEPT' : m && m[1];
-          if (m && ASSESSOR[key] && LEVEL[m[2]]) assessments[key] = { level: m[2], note: m[3] || '', at: String(l.At), byUserId: l.ByUserID || '' };
+          var p = parseAssessNote(l.Note);
+          var key = p && p.assessor;
+          if (!p || !ASSESSOR[key]) return;
+          // แถวเก่าเป็นระดับความเร่งด่วน (ของ จป ถือว่าพบจากงานทั่วไป) · แถวใหม่ของ จป เป็นระดับอันตราย แปลงตาม Config ตอนอ่าน
+          var hazard = key === 'SAFETY' && HAZARD[p.code] ? p.code : '';
+          if (!hazard && !LEVEL[p.code]) return;
+          assessments[key] = {
+            level: hazard ? hazardLevel(hazard, config) : p.code,
+            hazard: hazard,
+            foundFrom: key === 'SAFETY' ? (FOUND_FROM[p.foundFrom] ? p.foundFrom : FOUND_FROM_GENERAL) : '',
+            proxy: p.proxy,
+            note: p.note,
+            at: String(l.At),
+            byUserId: l.ByUserID || '',
+          };
         }
       });
     var assessors = assessorsFor(impacts);
@@ -509,7 +627,7 @@ var Core = (function () {
     var level = '';
     assessors.forEach(function (k) {
       var a = assessments[k];
-      if (a && (!level || LEVEL_ORDER.indexOf(a.level) < LEVEL_ORDER.indexOf(level))) level = a.level;
+      if (a && a.level && (!level || LEVEL_ORDER.indexOf(a.level) < LEVEL_ORDER.indexOf(level))) level = a.level;
     });
     var deadline = '';
     if (LEVEL_DAYS[level]) deadline = addHours(job.CreatedAt, configNumber(config, LEVEL_DAYS[level][0], LEVEL_DAYS[level][1]) * 24);
@@ -517,13 +635,58 @@ var Core = (function () {
     return { impacts: impacts, none: none, assessments: assessments, assessors: assessors, pending: pending, level: level, deadline: deadline, late: late };
   }
 
+  // ---------- ประเมินครบก่อนเปิด Noti (sap-helper 10) ----------
+
+  // สิ่งที่รอในข้อความ "รอ ___ ก่อนเปิด Noti"
+  var NOTI_GATE_WAIT = { DEPT: 'หัวหน้าแผนกประเมินความเร่งด่วน', SAFETY: 'จป ประเมินระดับอันตราย' };
+
+  // วันเปิดใช้กติกา (Config ASSESS_BEFORE_NOTI_FROM) เป็น YYYY-MM-DD · ว่างหรืออ่านไม่ออก = ยังไม่ใช้ ('')
+  // รับเฉพาะ YYYY-MM-DD · ปี พ.ศ. (เกิน 2400) แปลงเป็น ค.ศ. · แบบ ทับ (25/11/2026) ไม่รับ เพราะชีตแต่ละภาษาเรียงวัน/เดือนต่างกัน
+  // อ่านไม่ออกไม่เงียบ: notiGate ส่ง error ให้หน้ารายละเอียดงานบอกแอดมิน
+  function assessFirstFrom(config) {
+    var m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text((config || {}).ASSESS_BEFORE_NOTI_FROM));
+    if (!m) return '';
+    var y = +m[1];
+    var mo = +m[2];
+    var d = +m[3];
+    if (y > 2400) y -= 543;
+    var date = new Date(Date.UTC(y, mo - 1, d));
+    if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return '';
+    return date.toISOString().slice(0, 10);
+  }
+
+  // กติกาใช้กับงานที่แจ้งเวลานี้ไหม (createdAt = YYYY-MM-DD HH:mm:ss) · ใช้ทั้งกับงานเดิมและงานที่กำลังแจ้ง
+  function assessFirstApplies(createdAt, config) {
+    var from = assessFirstFrom(config);
+    return Boolean(from) && String(createdAt || '').slice(0, 10) >= from;
+  }
+
+  // ด่านก่อนเปิด Noti ของงาน: { applies, ready, waiting, message, error }
+  // applies = กติกาใช้กับงานนี้ (แจ้งตั้งแต่วันเปิดใช้) · ready = ใส่เลข Noti ได้ · waiting = ผู้ประเมินที่ยังค้าง (เฉพาะเมื่อ applies)
+  // error = ค่าใน Config พิมพ์ไว้แต่อ่านไม่ออก (กติกายังไม่ใช้) · info = impactInfo ของงาน · งานไม่กระทบพร้อมเสมอ
+  function notiGate(job, info, config) {
+    var applies = assessFirstApplies(job.CreatedAt, config);
+    var waiting = applies ? info.pending.slice() : [];
+    var raw = text((config || {}).ASSESS_BEFORE_NOTI_FROM);
+    return {
+      applies: applies,
+      ready: !waiting.length,
+      waiting: waiting,
+      message: waiting.length ? 'รอ ' + waiting.map(function (k) { return NOTI_GATE_WAIT[k]; }).join(' และ ') + ' ก่อนเปิด Noti' : 'ประเมินครบแล้ว',
+      error: raw && !assessFirstFrom(config)
+        ? 'Config ASSESS_BEFORE_NOTI_FROM "' + raw + '" อ่านไม่ออก (ต้องพิมพ์แบบ 2026-11-25) กติกาประเมินก่อนเปิด Noti จึงยังไม่ใช้ · แจ้งแอดมิน'
+        : '',
+    };
+  }
+
   // ลำดับความด่วนสำหรับเรียงคิว: ด่วนมาก 0 · ด่วน 1 · อื่น ๆ 9
   function levelRank(level) {
     return level === 'URGENT' ? 0 : level === 'HIGH' ? 1 : 9;
   }
 
-  function assessNote(assessor, level, note) {
-    return assessor + ':' + level + (note ? ' · ' + note : '');
+  // level = ระดับความเร่งด่วน (หัวหน้าแผนก) หรือระดับอันตราย (จป · มี foundFrom ต่อท้าย) · proxy = DEPT_HEAD / LEAD เมื่อประเมินแทน
+  function assessNote(assessor, level, note, foundFrom, proxy) {
+    return assessor + ':' + level + (foundFrom ? ':' + foundFrom : '') + (ASSESS_PROXY[proxy] ? '+' + proxy : '') + (note ? ' · ' + note : '');
   }
 
   // เกณฑ์งานค้างของสถานะ { hours, label } เช่น { 168, '7 วัน' } สถานะที่จบแล้วคืน null
@@ -616,6 +779,16 @@ var Core = (function () {
   // ประเภทงานรั่ว (YY ของ LK) ตามตารางในมาตรฐานชื่องานของโรงงาน (ตัวอย่างในเอกสารที่ขัดกันไม่ใช้)
   var LEAK_TYPES = { RW: 'วัตถุดิบ', FG: 'อาหาร', AR: 'อากาศ', LQ: 'วัตถุดิบเหลว', WT: 'น้ำ', ST: 'ไอน้ำ' };
 
+  // รหัสย่อย (YY) ของแต่ละ main group (XX) ตามตารางในมาตรฐานชื่องาน (เริ่มใช้ 1 ต.ค. 2025) · ไม่รวม CC (Change Control ระบบไม่ร่าง)
+  // เจ้าของ 20 พ.ย. 2026: รหัสต้องตามตารางเสมอ แต่ละกลุ่มใช้รหัสย่อยของกลุ่มตัวเองเท่านั้น (ตัวอย่างในเอกสาร SE.ST/SE.WT ไม่มีจริง)
+  // sapDraft ต้องสร้างรหัสจากตารางนี้เท่านั้น (เทสต์ไล่ทุกกรณี) · ยกเว้น LK.?? = งานรั่วที่ยังไม่เลือกประเภท ต้องเลือกก่อนใช้
+  var SAP_TASK_GROUPS = {
+    MC: ['CD', 'FN', 'EG', 'IM', 'PM', 'CM', 'SC', 'RF', 'AM', 'IA', 'EA', 'CC', 'PF', 'MF'],
+    LK: ['RW', 'FG', 'AR', 'LQ', 'WT', 'ST'],
+    LC: ['PM', 'CM', 'AM', 'IA', 'EA', 'CC'],
+    SE: ['SM', 'SP', 'SO', 'SV'],
+  };
+
   // จุดที่ระบบเดารหัสไม่แน่ใจ หัวหน้ากะต้องแตะยืนยันก่อนคัดลอก (ตรวจระดับ 2)
   var SAP_UNSURE = {
     LEAK: 'งานรั่ว: เลือกว่ารั่วอะไร แล้วตรวจรหัส LK',
@@ -691,11 +864,14 @@ var Core = (function () {
     return text(machine.localName) || text(machine.name).replace(/^A\+_/, '');
   }
 
-  // Priority และ Required End ใน SAP ดูแค่ผลกระทบตอนเปิด Noti ไม่แก้ตามผลประเมินทีหลัง (เจ้าของตกลง 4 พ.ย. 2026)
-  // ระดับความเร่งด่วนใช้เร่งงานในระบบเราเท่านั้น
-  var SAP_REQUIRED_END_DAYS = { High: 3, Medium: 7 };
-  // ประเภท Noti ของงานเครื่องจักร: ค่าเริ่มต้น AR (หน้างานใช้ส่วนใหญ่) หัวหน้ากะเปลี่ยนเป็น BM ได้
+  // sap-helper 11: Priority จากระดับความเร่งด่วนรวมหลังประเมิน (เกณฑ์ Critical/Non-Critical ของมาตรฐาน) · ค่าที่ไม่อยู่ในนี้ = Medium
+  // Required End = วันของกำหนดแก้ในแอป ไม่มีกำหนดแก้ใช้วันเปิด Noti + Config SAP_REQUIRED_END_DAYS (ค่าเริ่มต้น 7)
+  // ค่าที่ร่างตอนเปิด Noti ไม่แก้ตามผลประเมินที่เปลี่ยนทีหลัง
+  var SAP_HIGH_LEVELS = ['URGENT', 'HIGH'];
+  // ประเภท Noti ของงานเครื่องจักรที่พบจากงานทั่วไป: ค่าเริ่มต้น AR (หน้างานใช้ส่วนใหญ่) หัวหน้ากะเปลี่ยนเป็น BM ได้
   var MACHINE_NOTI_TYPES = ['AR', 'BM'];
+  // พบจาก (จป ประเมิน · sap-helper 09) → YY ของกลุ่ม SE ตามตารางมาตรฐาน · งานทั่วไปไม่อยู่ในตารางนี้
+  var SE_FOUND_FROM = { PATROL: 'SP', COMMITTEE: 'SO', PSM: 'SM', ENV: 'SV' };
 
   // วันที่ YYYY-MM-DD เป็นรูปแบบที่ SAP ใช้ DD.MM.YYYY
   function sapDate(date) {
@@ -703,26 +879,34 @@ var Core = (function () {
     return m ? m[3] + '.' + m[2] + '.' + m[1] : '';
   }
 
-  // ร่างข้อมูล Noti จากงาน ให้หัวหน้ากะตรวจแล้วคัดลอกไป SAP
-  // opts: { impacts (รหัสผลกระทบ ไม่รวม NONE), reporterRole, leakType, locationCode, equipmentId, notiType, config, today }
-  //   locationCode/equipmentId ส่งมาเมื่อหัวหน้ากะเปลี่ยน ไม่ส่งใช้ของงาน · today = วันเปิด Noti (YYYY-MM-DD) ใช้นับ Required End
-  //   งานเครื่องจักรเริ่มที่ AR หัวหน้ากะเปลี่ยนเป็น BM เองได้ (opts.notiType) · งานรั่วและงานที่ไม่ใช่เครื่องจักรระบบเลือกเอง (เจ้าของตกลง 4 พ.ย. 2026)
+  // ร่างข้อมูล Noti จากงานตามตารางมาตรฐานชื่องานของโรงงาน (sap-helper 11) ให้หัวหน้ากะตรวจแล้วคัดลอกไป SAP
+  // opts: { impacts (รหัสผลกระทบ ไม่รวม NONE), reporterRole, leakType, locationCode, equipmentId, notiType, config, today,
+  //         level, deadline, foundFrom (จาก impactInfo หลังประเมิน), reporterEmail, openerEmail }
+  //   locationCode/equipmentId ส่งมาเมื่อหัวหน้ากะเปลี่ยน ไม่ส่งใช้ของงาน · today = วันเปิด Noti (YYYY-MM-DD) ใช้นับ Required End เมื่อไม่มีกำหนดแก้
+  //   ตัวเลือกประเภทมีเฉพาะงานเครื่องจักรที่พบจากงานทั่วไป: เริ่ม AR เปลี่ยนเป็น BM ได้ (opts.notiType) · งานอื่นระบบเลือกเอง
+  //   Requester E-Mail = อีเมลผู้แจ้ง → อีเมลคนที่เปิด Noti (หัวหน้ากะ) → ว่าง · Reported By และ Coding ไม่ร่าง คนเปิด Noti กรอกใน SAP เอง (เจ้าของ 20 พ.ย. 2026)
   function sapDraft(job, opts) {
     opts = opts || {};
     var config = opts.config || {};
     var max = configNumber(config, 'SAP_SHORTTEXT_MAX', 40);
     var impacts = (opts.impacts || []).filter(function (c) { return IMPACT[c]; });
     var equipmentId = text(opts.equipmentId !== undefined ? opts.equipmentId : job.EquipmentID);
-    var leak = text(job.SymptomCode) === 'LEAK';
     var notMachine = equipmentId === NOT_MACHINE;
     var leakType = LEAK_TYPES[opts.leakType] ? opts.leakType : '';
     var staff = opts.reporterRole === 'STAFF';
-    var xx = leak ? 'LK' : notMachine ? 'LC' : 'MC';
-    var yy = leak ? leakType || '??' : notMachine ? 'CM' : (impacts.indexOf('PRODUCTION') >= 0 ? 'PF' : 'MF');
+    // กลุ่มชื่องาน (XX) ตามลำดับ: พบจากที่ไม่ใช่งานทั่วไป SE ก่อนทุกกลุ่ม → รั่ว LK → สถานที่ LC → เครื่องจักร MC
+    // SE ใช้แค่รหัสย่อยในตาราง SP SO SM SV แม้เป็นงานรั่ว (SE.ST/SE.WT ในตัวอย่างของเอกสารไม่มีจริง · เจ้าของ 20 พ.ย. 2026)
+    var se = SE_FOUND_FROM[opts.foundFrom] || '';
+    var leak = !se && text(job.SymptomCode) === 'LEAK';
+    var machine = !se && !leak && !notMachine;
+    var notiType = se ? 'AY' : leak ? (impacts.indexOf('SAFETY') >= 0 ? 'AY' : 'AR') : machine && opts.notiType === 'BM' ? 'BM' : 'AR';
+    var xx = se ? 'SE' : leak ? 'LK' : notMachine ? 'LC' : 'MC';
+    // เครื่องจักร AR = CM · BM = PF เมื่อกระทบการผลิต ไม่งั้น MF
+    var yy = se || (leak ? leakType || '??' : notiType === 'AR' ? 'CM' : (impacts.indexOf('PRODUCTION') >= 0 ? 'PF' : 'MF'));
     var zz = text(config[staff ? 'SAP_ZZ_STAFF' : 'SAP_ZZ_OTHER']) || (staff ? 'AM' : 'MG');
     var unsure = [];
     if (leak) unsure.push('LEAK');
-    else if (notMachine) unsure.push('NOT_MACHINE');
+    else if (notMachine) { if (!se) unsure.push('NOT_MACHINE'); }
     else if (!equipmentId) unsure.push('NO_EQUIPMENT');
     if (text(job.SymptomCode) === OTHER) unsure.push('SYMPTOM_OTHER');
     var location = text(opts.locationCode !== undefined ? opts.locationCode : job.AreaCode);
@@ -731,15 +915,18 @@ var Core = (function () {
       unsure.push('NO_LOCATION');
     }
     var code = xx + '.' + yy + '.' + zz + '.';
-    var priority = impacts.length ? 'High' : 'Medium';
-    var machine = !leak && !notMachine;
+    var deadlineDate = text(opts.deadline).slice(0, 10);
+    var endDays = configNumber(config, 'SAP_REQUIRED_END_DAYS', 7);
+    var requiredEnd = sapDate(deadlineDate);
     return {
       code: code,
-      notiType: leak ? (impacts.indexOf('SAFETY') >= 0 ? 'AY' : 'AR') : machine && opts.notiType === 'BM' ? 'BM' : 'AR',
+      notiType: notiType,
       notiTypeChoices: machine ? MACHINE_NOTI_TYPES : [],
-      priority: priority,
-      requiredEndDays: SAP_REQUIRED_END_DAYS[priority],
-      requiredEnd: opts.today ? sapDate(addDays(opts.today, SAP_REQUIRED_END_DAYS[priority])) : '',
+      priority: SAP_HIGH_LEVELS.indexOf(opts.level) >= 0 ? 'High' : 'Medium',
+      requiredEnd: requiredEnd || (opts.today ? sapDate(addDays(opts.today, endDays)) : ''),
+      requiredEndFrom: requiredEnd ? 'DEADLINE' : 'DEFAULT',
+      requiredEndDays: endDays,
+      requesterEmail: usableEmail(opts.reporterEmail) || usableEmail(opts.openerEmail),
       shortText: code + sapName(job, max - code.length),
       location: location,
       equipmentId: notMachine ? '' : equipmentId,
@@ -1056,6 +1243,8 @@ var Core = (function () {
     qrLocation: qrLocation,
     qrReportAllowed: qrReportAllowed,
     sapDraft: sapDraft,
+    SAP_TASK_GROUPS: SAP_TASK_GROUPS,
+    usableEmail: usableEmail,
     sapDate: sapDate,
     formatNoti: formatNoti,
     NOTE_MAX: NOTE_MAX,
@@ -1072,11 +1261,28 @@ var Core = (function () {
     LEVEL_ORDER: LEVEL_ORDER,
     validateImpacts: validateImpacts,
     ASSESSOR: ASSESSOR,
+    HAZARD: HAZARD,
+    HAZARD_ORDER: HAZARD_ORDER,
+    HAZARD_NONE: HAZARD_NONE,
+    FOUND_FROM: FOUND_FROM,
+    FOUND_FROM_ORDER: FOUND_FROM_ORDER,
+    FOUND_FROM_GENERAL: FOUND_FROM_GENERAL,
+    ASSESS_NOTE: ASSESS_NOTE,
+    hazardLevel: hazardLevel,
+    hazardLevels: hazardLevels,
     IMPACT_REMOVE: IMPACT_REMOVE,
     canAssess: canAssess,
+    assessRight: assessRight,
+    leadAssessHours: leadAssessHours,
+    parseAssessNote: parseAssessNote,
+    assessorLabel: assessorLabel,
+    ASSESS_PROXY: ASSESS_PROXY,
     canEditImpact: canEditImpact,
     assessorsFor: assessorsFor,
     impactInfo: impactInfo,
+    assessFirstFrom: assessFirstFrom,
+    assessFirstApplies: assessFirstApplies,
+    notiGate: notiGate,
     levelRank: levelRank,
     assessNote: assessNote,
     REPORTER_CONFIRM: REPORTER_CONFIRM,

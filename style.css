@@ -116,6 +116,8 @@ button.small { min-height: 44px; padding: 0 16px; font-size: 15px; }
 
 /* ฟอร์ม */
 .field { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; }
+/* .field อยู่หลัง .hidden จึงทับ display: none ช่องที่ซ่อน (ชื่องาน SAP · เลข Noti ตอนรอประเมิน) ต้องซ่อนจริง */
+.field.hidden { display: none; }
 .field label:not(.choice), .field legend { font-size: 15px; font-weight: 700; padding: 0; }
 .field input[type="text"], .field input[type="tel"], .field input[type="email"], .field select {
   min-height: 52px;

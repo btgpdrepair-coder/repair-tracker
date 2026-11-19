@@ -1355,7 +1355,7 @@
     // ตรวจด้วยกติกาชุดเดียวกับ backend · งานแจ้งแทนที่ใส่เลข Noti ตรวจเลข Noti ด้วย (ใบงาน 12)
     var check = function () {
       var result = Core.validateJob(draft, options);
-      if (options.noti && String(draft.notiNo || '').trim()) {
+      if (options.noti && !notiBlocked(options, draft) && String(draft.notiNo || '').trim()) {
         var noti = Core.validateNoti(draft, { NOTI_DIGITS: options.noti.digits, SAP_SHORTTEXT_MAX: options.noti.sapMax });
         Object.keys(noti.fields).forEach(function (k) { result.fields[k] = noti.fields[k]; });
         result.ok = result.ok && noti.ok;
@@ -1458,11 +1458,11 @@
       form.appendChild(summary(sapMode ? 'ตำแหน่ง' : 'พื้นที่', el('span', '', value.areaName), whereStep));
       form.appendChild(summary('ตรงไหน', el('span', '', value.locationDetail), whereStep));
       if (options.noti) {
-        form.appendChild(el('p', 'notice', 'แจ้งแทนคนอื่น: ใส่ชื่อและเบอร์ของคนแจ้งจริงในรายละเอียด · ถ้าเปิด Noti ใน SAP แล้ว ใส่เลข Noti ด้านล่าง งานจะเข้าคิวรอซ่อมทันที'));
+        form.appendChild(el('p', 'notice', 'แจ้งแทนคนอื่น: ถ้าเปิด Noti ใน SAP แล้ว ใส่เลข Noti ด้านล่าง งานจะเข้าคิวรอซ่อมทันที'));
       }
-      impactChips(form, draft, persist);
-      textArea(form, 'detail', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)', options.noti ? 'เช่น คุณสมมุติ 0812345678 โทรมาแจ้ง' : 'เช่น เริ่มรั่วตั้งแต่เช้า',
-        draft.detail, function (text) { draft.detail = text; persist(); });
+      var notiGate = null;
+      impactChips(form, draft, persist, function () { if (notiGate) notiGate(); });
+      // ช่อง "รายละเอียดเพิ่มเติม" เอาออก 20 พ.ย. 2026 (เจ้าของตัดสิน: คนแทบไม่เขียน) · งานเก่าที่มีรายละเอียดยังแสดงในหน้ารายละเอียดงาน
       if (options.noti) {
         var notiNo = field(form, 'notiNo', 'เลข Noti (ถ้าเปิดใน SAP แล้ว)', input('text', options.noti.digits + ' หลัก'), true);
         notiNo.inputMode = 'numeric';
@@ -1490,6 +1490,17 @@
           persist();
         });
         sap.addEventListener('input', function () { draft.sapShortText = sap.value; persist(); });
+        // sap-helper 10: รอประเมิน = ซ่อนช่องเลข Noti และไม่ส่ง (notiBlocked) · ค่าที่พิมพ์ไว้ไม่หาย
+        var notiBox = notiNo.parentNode;
+        var waitNote = el('p', 'notice hidden', 'งานที่ติ๊กผลกระทบต้องรอประเมินก่อนเปิด Noti · ส่งงานไปก่อน แล้วใส่เลข Noti ในหน้ารายละเอียดงานเมื่อประเมินครบ');
+        form.insertBefore(waitNote, notiBox);
+        notiGate = function () {
+          var blocked = notiBlocked(options, draft);
+          waitNote.classList.toggle('hidden', !blocked);
+          notiBox.classList.toggle('hidden', blocked);
+          sapBox.classList.toggle('hidden', blocked || !String(draft.notiNo || '').trim());
+        };
+        notiGate();
       }
     }
 
@@ -1563,7 +1574,8 @@
   }
 
   // ใบงาน 27: "งานนี้กระทบอะไร" บังคับเลือก · 3 ด้านเลือกได้หลายข้อ · "ไม่กระทบ" เลือกเดี่ยว
-  function impactChips(form, draft, persist) {
+  // onChange (ไม่บังคับ) เรียกหลังผู้ใช้กดติ๊กเปลี่ยน
+  function impactChips(form, draft, persist, onChange) {
     var body = group(form, 'impacts', 'งานนี้กระทบอะไร *');
     var row = el('div', 'chips');
     var codes = Object.keys(Core.IMPACT).concat([Core.IMPACT_NONE]);
@@ -1582,6 +1594,7 @@
           }
           persist();
           render();
+          if (onChange) onChange();
         });
         row.appendChild(chip);
       });
@@ -1596,10 +1609,19 @@
   function historyNote(h) {
     var label = function (c) { return c === Core.IMPACT_NONE ? Core.IMPACT_NONE_LABEL : Core.IMPACT[c] || c; };
     if (h.action === 'IMPACT' || h.action === 'IMPACT_REMOVE') return h.note.split(',').map(label).join(', ');
-    var m = h.action === 'ASSESS' && /^([A-Z]+):([A-Z]+)(?: · ([\s\S]*))?$/.exec(h.note);
-    if (!m) return h.note;
-    var who = Core.ASSESSOR[m[1]] || (m[1] === 'SAFETY' ? Core.ASSESSOR.SAFETY : Core.ASSESSOR.DEPT);
-    return who + ': ' + (Core.LEVEL[m[2]] || m[2]) + (m[3] ? ' · ' + m[3] : '');
+    // sap-helper 09: "SAFETY:SERIOUS:PATROL · ..." → "จป: High · พบจาก Safety Patrol · ..." (แถวเก่าเป็นระดับความเร่งด่วน)
+    // app-simplify 01: "SAFETY:MINOR:GENERAL+DEPT_HEAD" → "หัวหน้าแผนก (แทน จป): Low"
+    var p = h.action === 'ASSESS' && Core.parseAssessNote(h.note);
+    if (!p) return h.note;
+    var safety = p.assessor === 'SAFETY';
+    var hazard = safety && Core.HAZARD[p.code];
+    var level = hazard || Core.LEVEL[p.code] || p.code;
+    return Core.assessorLabel(safety ? 'SAFETY' : 'DEPT', p.proxy) + ': ' + level + (hazard ? foundFromText(p.foundFrom) : '') + (p.note ? ' · ' + p.note : '');
+  }
+
+  // " · พบจาก Safety Patrol" · งานทั่วไป (ค่าเริ่มต้น) หรือว่างไม่แสดง
+  function foundFromText(code) {
+    return code && code !== Core.FOUND_FROM_GENERAL ? ' · พบจาก ' + (Core.FOUND_FROM[code] || code) : '';
   }
 
   // ป้ายผลกระทบในรายการ (ใบงาน 27): รอประเมิน · ระดับด่วนมาก/ด่วน
@@ -1623,6 +1645,11 @@
     return out;
   }
 
+  // sap-helper 10: กติกาประเมินก่อนเปิด Noti เปิดใช้แล้ว + ติ๊กผลกระทบที่ต้องมีคนประเมิน = ใส่เลข Noti ตอนแจ้งงานไม่ได้
+  function notiBlocked(options, draft) {
+    return Boolean(options.noti && options.noti.assessFirst) && Core.assessorsFor(draft.impacts || []).length > 0;
+  }
+
   function sendJob(me, options, draft, button, formError) {
     button.disabled = true;
     button.textContent = 'กำลังส่ง…';
@@ -1641,8 +1668,9 @@
       clientRequestId: draft.clientRequestId,
       impacts: draft.impacts,
       // งานแจ้งแทนพร้อมเลข Noti (เฉพาะหัวหน้ากะและแอดมิน backend ตรวจสิทธิ์ซ้ำ)
-      notiNo: options.noti ? draft.notiNo : undefined,
-      sapShortText: options.noti ? draft.sapShortText : undefined,
+      // sap-helper 10: ช่องเลข Noti ที่ซ่อนเพราะรอประเมิน ไม่ส่ง (ค่าที่พิมพ์ไว้ยังอยู่ในแบบร่าง เอาติ๊กออกแล้วกลับมา)
+      notiNo: options.noti ? (notiBlocked(options, draft) ? '' : draft.notiNo) : undefined,
+      sapShortText: options.noti ? (notiBlocked(options, draft) ? '' : draft.sapShortText) : undefined,
     })
       .then(function (res) {
         if (res.ok) {
@@ -1776,7 +1804,8 @@
     SELF_FIX: 'ผู้แจ้งแก้เอง',
     IMPACT: 'ติ๊กผลกระทบ',
     IMPACT_REMOVE: 'เอาผลกระทบออก',
-    ASSESS: 'ประเมินความเร่งด่วน',
+    // หัวหน้าแผนกประเมินความเร่งด่วน · จป ประเมินระดับอันตราย (sap-helper 09) หมายเหตุบอกว่าใครประเมินอะไร
+    ASSESS: 'ประเมิน',
   };
 
   // nav คือหน้าที่เปิดมา { label, go(notice) } ใช้ทำปุ่มย้อนกลับ (ไม่มีถ้าเปิดจากลิงก์ตรง)
@@ -2218,7 +2247,7 @@
     }
     var spot = textField(form, nothing, state, 'locationDetail', 'locationDetail', 'ตรงไหน', 'เช่น ชั้น 2 ข้างลิฟต์');
     suggestions(spot, (options.locationSuggestions || {})[state.areaCode] || []);
-    textArea(form, 'detail', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)', 'เช่น เริ่มรั่วตั้งแต่เช้า', state.detail, function (text) { state.detail = text; });
+    // ไม่มีช่องรายละเอียดเพิ่มเติมแล้ว (20 พ.ย. 2026) · state.detail ส่งค่าเดิมกลับไป รายละเอียดของงานเก่าไม่หาย
     var formError = el('p', 'error hidden');
     form.appendChild(formError);
     var tools = el('div', 'toolbar');
@@ -2383,10 +2412,9 @@
   // ร่างล่าสุดตามที่หัวหน้ากะเปลี่ยน (ตำแหน่ง เครื่อง ประเภทรั่ว)
   function sapDraftNow(noti, state) {
     var input = noti.sap.input;
-    return Core.sapDraft(input.job, {
-      impacts: input.impacts, reporterRole: input.reporterRole, config: input.config, today: input.today,
+    return Core.sapDraft(input.job, Object.assign({}, input, {
       locationCode: state.location, equipmentId: state.equipmentId, leakType: state.leakType, notiType: state.notiType,
-    });
+    }));
   }
 
   // ตรวจครบทุกจุดสีเหลืองแล้ว (งานรั่วต้องเลือกประเภทด้วย)
@@ -2479,10 +2507,16 @@
     }
     sapRow('Functional loc.', d.location ? d.location + '\n' + locName : '- (ยังไม่เลือก)', d.location, false, '', 'loc');
     sapRow('Equipment', eqText, d.equipmentId, false, '', 'eq');
-    sapRow('Priority', d.priority + (d.priority === 'High' ? ' (มีผลกระทบ)' : ' (ไม่กระทบ)'), d.priority, false);
-    if (d.requiredEnd) sapRow('Required End', d.requiredEnd + ' (' + d.requiredEndDays + ' วัน)', d.requiredEnd, false);
+    // sap-helper 11: Priority และ Required End จากระดับหลังประเมิน
+    var input = noti.sap.input;
+    var levelText = input.level ? Core.LEVEL[input.level] : input.impacts.length ? 'ยังไม่ประเมิน' : 'ไม่กระทบ';
+    sapRow('Priority', d.priority + ' (' + levelText + ')', d.priority, false);
+    if (d.requiredEnd) {
+      sapRow('Required End', d.requiredEnd + (d.requiredEndFrom === 'DEADLINE' ? ' (กำหนดแก้ในแอป)' : ' (วันนี้ + ' + d.requiredEndDays + ' วัน)'), d.requiredEnd, false);
+    }
+    sapRow('Requester E-Mail', d.requesterEmail || '- (ไม่มีอีเมล กรอกใน SAP เอง)', d.requesterEmail, false);
     sapRow('Description', d.description, d.description, false);
-    card.appendChild(el('small', 'muted', 'ชื่องาน (Short text) อยู่ในช่องด้านล่าง · Reported By, Requester E-Mail กรอกใน SAP เอง'));
+    card.appendChild(el('small', 'muted', 'ชื่องาน (Short text) อยู่ในช่องด้านล่าง · Reported By และ Coding กรอกใน SAP เอง'));
     return card;
 
     function sapRow(name, value, copy, locked, cls, change) {
@@ -2776,24 +2810,40 @@
       });
       card.appendChild(ticked);
     }
-    // ผลประเมิน: หัวหน้าแผนก (ทุกด้าน) · จป (เฉพาะความปลอดภัย) · ระดับของงาน = ระดับที่ด่วนกว่า
-    (info.assessments || []).forEach(function (a) {
+    // ผลประเมิน: หัวหน้าแผนก (การผลิตหรือ NCP) · จป (ความปลอดภัย) · ระดับของงาน = ระดับที่ด่วนกว่า
+    // app-simplify 01: ผู้ใช้ประเมินได้ทั้งสองช่อง = ปุ่มเดียวเปิดหน้าสองช่อง (กดบันทึกครั้งเดียว) · ผลที่ประเมินแทนบอกว่าแทน
+    var list = info.assessments || [];
+    var both = list.length === 2 && list.every(function (a) { return a.canAssess; });
+    list.forEach(function (a) {
       var item = el('div', 'history');
       var top = el('div', 'job-head');
       top.appendChild(el('strong', '', 'ประเมินโดย' + a.label));
-      top.appendChild(a.level ? badge(Core.LEVEL[a.level], LEVEL_KIND[a.level]) : badge('รอประเมิน', 'info'));
+      // จป: ป้ายเป็นระดับอันตราย ใต้ป้ายบอกว่านับเป็นความเร่งด่วนอะไร (sap-helper 09) · แถวเก่าเป็นระดับความเร่งด่วน
+      var label = a.hazard ? Core.HAZARD[a.hazard] : Core.LEVEL[a.level];
+      top.appendChild(a.level ? badge(label, LEVEL_KIND[a.level]) : badge('รอประเมิน', 'info'));
       item.appendChild(top);
+      if (a.hazard) {
+        item.appendChild(el('small', 'muted', 'นับเป็น ' + Core.LEVEL[a.level] + foundFromText(a.foundFrom)));
+      }
       if (a.note) item.appendChild(el('small', '', a.note));
-      if (a.by) item.appendChild(el('small', 'muted', a.by + ' · ' + shortTime(a.at)));
-      if (a.canAssess) {
+      if (a.by) item.appendChild(el('small', 'muted', a.by + (a.proxy ? ' · ประเมินแทน ' + a.label : '') + ' · ' + shortTime(a.at)));
+      if (a.canAssess && !both) {
         item.appendChild(actionButton(a.level ? 'small' : 'primary small', a.level ? 'เปลี่ยนระดับ' : 'ประเมิน',
-          function () { showAssess(me, data, a, self); }));
+          function () { (a.code === 'SAFETY' ? showHazardAssess : showAssess)(me, data, a, self); }));
       }
       card.appendChild(item);
     });
+    if (both) {
+      var done = list.every(function (a) { return a.level; });
+      card.appendChild(actionButton(done ? 'small' : 'primary small', done ? 'เปลี่ยนระดับ' : 'ประเมิน',
+        function () { showBothAssess(me, data, self); }));
+    }
     if (info.deadline) {
       card.appendChild(el('small', info.late ? 'field-error' : 'muted', 'ต้องแก้ภายใน ' + shortTime(info.deadline) + (info.late ? ' (เลยกำหนดแล้ว)' : '')));
     }
+    // sap-helper 10: ประเมินครบก่อนเปิด Noti · ยังไม่ครบ = ไม่มีปุ่มเปิด Noti จึงบอกว่ารอใคร
+    if (data.notiGate && data.notiGate.error) card.appendChild(el('p', 'field-error', data.notiGate.error));
+    else if (data.notiGate) card.appendChild(el('p', data.notiGate.ready ? 'muted' : 'notice', data.notiGate.message));
     if (info.canAdd.length) {
       var add = el('div', 'chips');
       info.canAdd.forEach(function (code) {
@@ -2818,18 +2868,18 @@
     return card;
   }
 
-  // ฟอร์มประเมินความเร่งด่วนในฐานะหัวหน้าแผนกหรือ จป: 4 ระดับ + หมายเหตุ (ไม่บังคับ)
-  // impact = แถวผลประเมิน { code: DEPT | SAFETY, label, level, note } จาก data.impact.assessments
+  // ฟอร์มประเมินความเร่งด่วนในฐานะหัวหน้าแผนก: 4 ระดับ + หมายเหตุ (ไม่บังคับ) · จป ใช้ showHazardAssess (sap-helper 09)
+  // impact = แถวผลประเมิน { code: DEPT, label, level, note } จาก data.impact.assessments
   function showAssess(me, data, impact, nav) {
-    var main = screen('ประเมิน' + (impact.code === 'SAFETY' ? 'ความปลอดภัย' : 'ผลกระทบ'));
+    var main = screen('ประเมินผลกระทบ');
     backButton(main, nav);
     main.appendChild(jobSummary(me, data, nav));
     var form = el('form', 'card');
     form.noValidate = true;
-    var title = impact.code === 'SAFETY' ? 'ประเมินความปลอดภัย (จป)' : 'ประเมินผลกระทบและความรุนแรง (หัวหน้าแผนก)';
-    form.appendChild(el('h1', '', title));
+    form.appendChild(el('h1', '', 'ประเมินความเร่งด่วน (' + Core.assessorLabel('DEPT', impact.assessAs) + ')'));
     var sides = (data.impact.impacts || []).map(function (i) { return i.label; }).join(', ');
     if (sides) form.appendChild(el('p', 'muted', 'งานนี้กระทบ: ' + sides));
+    proxyNotice(form, [impact]);
     var box = el('fieldset', 'field');
     box.dataset.field = 'level';
     box.appendChild(el('legend', '', 'ความเร่งด่วน *'));
@@ -2878,6 +2928,184 @@
         });
     });
     main.appendChild(form);
+  }
+
+  // sap-helper 09: จป ประเมินระดับอันตราย 5 ระดับ (คำอธิบายใต้แต่ละระดับ + นับเป็นความเร่งด่วนอะไร) + พบจาก (งานทั่วไปเป็นค่าเริ่มต้น)
+  // ไม่อันตราย = ระบบเอาผลกระทบความปลอดภัยออกจากงาน (ถามยืนยันก่อน) · impact = แถวผลประเมิน { code: SAFETY, hazard, foundFrom, note }
+  function showHazardAssess(me, data, impact, nav) {
+    var main = screen('ประเมินระดับอันตราย');
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'ประเมินระดับอันตราย (' + Core.assessorLabel('SAFETY', impact.assessAs) + ')'));
+    proxyNotice(form, [impact]);
+    // ระดับเป็นปุ่มแถวเดียวแบบเดียวกับพบจาก (เจ้าของบอกการ์ดใหญ่ไป ใช้ยาก) · ใต้ปุ่มบอกว่าระดับที่เลือกนับเป็นอะไร
+    var levels = data.impact.hazardLevels;
+    var hazard = impact.hazard || '';
+    var hazardHint = function () {
+      if (!hazard) return 'เลือก 1 ระดับ';
+      return hazard === Core.HAZARD_NONE ? 'ไม่อันตราย: เอาผลกระทบความปลอดภัยออกจากงาน' : 'นับเป็น ' + Core.LEVEL[levels[hazard]];
+    };
+    var hint = el('span', 'hint', hazardHint());
+    var box = el('div', 'field');
+    box.dataset.field = 'hazard';
+    box.appendChild(el('label', '', 'ระดับอันตราย *'));
+    box.appendChild(chipGroup(Core.HAZARD_ORDER, Core.HAZARD, hazard, function (code) {
+      hazard = code;
+      hint.textContent = hazardHint();
+    }));
+    box.appendChild(hint);
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+
+    var found = impact.foundFrom || Core.FOUND_FROM_GENERAL;
+    var foundBox = el('div', 'field');
+    foundBox.dataset.field = 'foundFrom';
+    foundBox.appendChild(el('label', '', 'พบจาก'));
+    foundBox.appendChild(chipGroup(Core.FOUND_FROM_ORDER, Core.FOUND_FROM, found, function (code) { found = code; }));
+    foundBox.appendChild(el('span', 'hint', 'ถ้าไม่ใช่งานทั่วไป ชื่องานใน SAP จะใช้กลุ่ม SE และเปิดเป็น AY'));
+    foundBox.appendChild(el('small', 'field-error'));
+    form.appendChild(foundBox);
+
+    var note = impact.note || '';
+    textArea(form, 'note', 'หมายเหตุ (ไม่บังคับ)', 'เช่น กั้นพื้นที่ก่อนเข้าซ่อม', note, function (t) { note = t; });
+    if ((data.impact.assessments || []).length > 1) form.appendChild(el('p', 'notice', 'ระบบใช้ระดับที่ด่วนกว่า ระหว่างระดับอันตรายกับความเร่งด่วนของหัวหน้าแผนก'));
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', 'บันทึกการประเมิน');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    var fail = function (message) {
+      error.textContent = message;
+      error.classList.remove('hidden');
+      submit.disabled = false;
+      submit.textContent = 'บันทึกการประเมิน';
+    };
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      showFieldErrors(form, hazard ? {} : { hazard: 'กรุณาเลือกระดับอันตราย' });
+      if (!hazard) return;
+      var picked = hazard;
+      var none = picked === Core.HAZARD_NONE;
+      if (none && !window.confirm('ไม่อันตราย: ระบบจะเอา "ความปลอดภัย" ออกจากงานนี้ และจดว่าคุณเป็นคนเอาออก ยืนยันไหม?')) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังบันทึก…';
+      api('assessImpact', { jobId: data.job.jobId, assessor: 'SAFETY', hazard: picked, foundFrom: found, note: note.trim() })
+        .then(function (res) {
+          if (res.ok) return nav.go(none ? 'บันทึกแล้ว: ไม่อันตราย เอาความปลอดภัยออกจากงานแล้ว' : 'บันทึกการประเมินแล้ว: ' + Core.HAZARD[picked]);
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          fail(res.error.message);
+        })
+        .catch(function () { fail('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง'); });
+    });
+    main.appendChild(form);
+  }
+
+  // app-simplify 01: บอกว่ากำลังประเมินแทนใคร (หัวหน้าแผนกแทน จป · หัวหน้ากะแทนเมื่องานรอเกินกำหนด) · rows = แถวผลประเมินที่จะบันทึก
+  function proxyNotice(form, rows) {
+    var names = rows.filter(function (a) { return a.assessAs === 'DEPT_HEAD' || a.assessAs === 'LEAD'; })
+      .map(function (a) { return a.label; });
+    if (!names.length) return;
+    var lead = rows.some(function (a) { return a.assessAs === 'LEAD'; });
+    form.appendChild(el('p', 'notice', 'คุณประเมินแทน ' + names.join(' และ ') + (lead ? ' เพราะงานรอประเมินเกินกำหนด' : '') +
+      ' · ระบบจดว่าประเมินแทน และผู้ประเมินตัวจริงเปลี่ยนผลทีหลังได้'));
+  }
+
+  // app-simplify 01: หน้าเดียวสองช่อง (ระดับอันตราย + ความเร่งด่วน) สำหรับคนที่ประเมินได้ทั้งสอง (หัวหน้าแผนก หัวหน้ากะเมื่อเกินกำหนด แอดมิน)
+  // กดบันทึกครั้งเดียว ส่ง assessors ทั้งสอง · ระบบใช้ระดับที่ด่วนกว่า · ปุ่มแถวเดียวทั้งหน้า ให้อยู่ในจอเดียว (mistakes ข้อ 28)
+  function showBothAssess(me, data, nav) {
+    var rows = data.impact.assessments || [];
+    var dept = rows.filter(function (a) { return a.code === 'DEPT'; })[0] || {};
+    var safety = rows.filter(function (a) { return a.code === 'SAFETY'; })[0] || {};
+    var main = screen('ประเมินงาน');
+    backButton(main, nav);
+    main.appendChild(jobSummary(me, data, nav));
+    var form = el('form', 'card');
+    form.noValidate = true;
+    form.appendChild(el('h1', '', 'ประเมินงาน'));
+    proxyNotice(form, rows);
+    var levels = data.impact.hazardLevels;
+    var hazard = safety.hazard || '';
+    var level = dept.level || '';
+    var hazardHint = function () {
+      if (!hazard) return 'เลือก 1 ระดับ';
+      return hazard === Core.HAZARD_NONE ? 'ไม่อันตราย: เอาผลกระทบความปลอดภัยออกจากงาน' : 'นับเป็น ' + Core.LEVEL[levels[hazard]];
+    };
+    var hint = el('span', 'hint', hazardHint());
+    var box = el('div', 'field');
+    box.dataset.field = 'hazard';
+    box.appendChild(el('label', '', 'ระดับอันตราย (ความปลอดภัย) *'));
+    box.appendChild(chipGroup(Core.HAZARD_ORDER, Core.HAZARD, hazard, function (code) { hazard = code; hint.textContent = hazardHint(); }));
+    box.appendChild(hint);
+    box.appendChild(el('small', 'field-error'));
+    form.appendChild(box);
+
+    var found = safety.foundFrom || Core.FOUND_FROM_GENERAL;
+    var foundBox = el('div', 'field');
+    foundBox.dataset.field = 'foundFrom';
+    foundBox.appendChild(el('label', '', 'พบจาก'));
+    foundBox.appendChild(chipGroup(Core.FOUND_FROM_ORDER, Core.FOUND_FROM, found, function (code) { found = code; }));
+    foundBox.appendChild(el('small', 'field-error'));
+    form.appendChild(foundBox);
+
+    var levelBox = el('div', 'field');
+    levelBox.dataset.field = 'level';
+    levelBox.appendChild(el('label', '', 'ความเร่งด่วน (การผลิต / NCP) *'));
+    levelBox.appendChild(chipGroup(Core.LEVEL_ORDER, Core.LEVEL, level, function (code) { level = code; }));
+    levelBox.appendChild(el('small', 'field-error'));
+    form.appendChild(levelBox);
+
+    var note = safety.note || dept.note || '';
+    textArea(form, 'note', 'หมายเหตุ (ไม่บังคับ)', 'เช่น กั้นพื้นที่ก่อนเข้าซ่อม', note, function (t) { note = t; });
+    form.appendChild(el('p', 'notice', 'ระบบใช้ระดับที่ด่วนกว่า ระหว่างระดับอันตรายกับความเร่งด่วน'));
+    var error = el('p', 'error hidden');
+    form.appendChild(error);
+    var submit = el('button', 'primary', 'บันทึกการประเมิน');
+    submit.type = 'submit';
+    form.appendChild(submit);
+    var fail = function (message) {
+      error.textContent = message;
+      error.classList.remove('hidden');
+      submit.disabled = false;
+      submit.textContent = 'บันทึกการประเมิน';
+    };
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      var fields = {};
+      if (!hazard) fields.hazard = 'กรุณาเลือกระดับอันตราย';
+      if (!level) fields.level = 'กรุณาเลือกระดับความเร่งด่วน';
+      showFieldErrors(form, fields);
+      if (Object.keys(fields).length) return;
+      var none = hazard === Core.HAZARD_NONE;
+      if (none && !window.confirm('ไม่อันตราย: ระบบจะเอา "ความปลอดภัย" ออกจากงานนี้ และจดว่าคุณเป็นคนเอาออก ยืนยันไหม?')) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังบันทึก…';
+      api('assessImpact', { jobId: data.job.jobId, assessors: ['DEPT', 'SAFETY'], level: level, hazard: hazard, foundFrom: found, note: note.trim() })
+        .then(function (res) {
+          if (res.ok) return nav.go('บันทึกการประเมินแล้ว: ' + Core.HAZARD[hazard] + ' · ' + Core.LEVEL[level]);
+          if (res.error.details && res.error.details.fields) showFieldErrors(form, res.error.details.fields);
+          fail(res.error.message);
+        })
+        .catch(function () { fail('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วกดอีกครั้ง'); });
+    });
+    main.appendChild(form);
+  }
+
+  // ปุ่มเลือก 1 ค่าเรียงเป็นแถว (ขึ้นบรรทัดใหม่เองเมื่อจอแคบ) · codes ตามลำดับ · labels = { code: ชื่อ } · onPick(code)
+  function chipGroup(codes, labels, selected, onPick) {
+    var chips = el('div', 'chips');
+    codes.forEach(function (code) {
+      var chip = el('button', 'chip', labels[code]);
+      chip.type = 'button';
+      chip.setAttribute('aria-pressed', String(code === selected));
+      chip.addEventListener('click', function () {
+        Array.prototype.forEach.call(chips.children, function (c, i) { c.setAttribute('aria-pressed', String(codes[i] === code)); });
+        onPick(code);
+      });
+      chips.appendChild(chip);
+    });
+    return chips;
   }
 
   // ---------- ผู้แจ้งยืนยัน (ใบงาน 29) และผู้แจ้งแก้เอง (ใบงาน 25) ----------

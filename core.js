@@ -44,6 +44,8 @@ var Core = (function () {
     PC_DISABLED: 'PC_DISABLED',
     PAIR_CODE_EXPIRED: 'PAIR_CODE_EXPIRED',
     PAIR_CODE_USED: 'PAIR_CODE_USED',
+    // sap-helper 13: User SAP นี้มีเจ้าของแล้ว
+    SAP_USER_TAKEN: 'SAP_USER_TAKEN',
   };
 
   // ข้อความภาษาไทยของแต่ละ error ที่หน้าจอแสดงได้เลย
@@ -64,6 +66,7 @@ var Core = (function () {
     PC_DISABLED: 'คอมนี้ถูกปิดใช้ ให้แอดมินผูกคอมนี้ใหม่',
     PAIR_CODE_EXPIRED: 'QR นี้หมดอายุแล้ว ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรมบนคอม แล้วสแกนใหม่',
     PAIR_CODE_USED: 'QR นี้ถูกใช้ผูกคอมไปแล้ว ถ้าคอมยังไม่ได้ผูก ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรม',
+    SAP_USER_TAKEN: 'User SAP นี้ผูกกับคนอื่นแล้ว ถ้าผูกผิดคน ให้แอดมินยกเลิกการผูกในหน้าคอมที่ผูกก่อน',
   };
 
   // แปลงสถานะผู้ใช้ที่ยังไม่อนุมัติเป็น error code ที่ใช้ปฏิเสธคำขอ
@@ -181,6 +184,21 @@ var Core = (function () {
   function actsAsLead(user) {
     return LEAD_ROLES.indexOf((user || {}).Role) >= 0;
   }
+
+  // ชื่อโรลภาษาไทย (หน้าจอแอปและโปรแกรมบนคอมใช้ชุดเดียวกัน) เรียงตามลำดับในหน้าเลือกโรล
+  var ROLE_LABEL = {
+    STAFF: 'พนักงานหน้างาน',
+    LEAD: 'หัวหน้ากะ',
+    PLANNER: 'Planner',
+    TECH: 'ช่าง',
+    ADMIN: 'แอดมิน',
+    SAFETY: 'จป',
+    DEPT_HEAD: 'หัวหน้าแผนก',
+    DIRECTOR: 'ผอ.',
+  };
+
+  // sap-helper 13: โรลที่ผูก User SAP และใช้โปรแกรมช่วยเปิด Noti ได้ (สเปก sap-helper ข้อ 22)
+  var SAP_USER_ROLES = ['LEAD', 'SAFETY', 'ADMIN'];
 
   // รหัสของปุ่ม "อื่น ๆ" ทั้งอาการและพื้นที่ ไม่มีในชีต ข้อความที่พิมพ์อยู่ใน SymptomOther / AreaOther
   var OTHER = 'OTHER';
@@ -994,6 +1012,8 @@ var Core = (function () {
     REPORTER_ROLES: REPORTER_ROLES,
     LEAD_ROLES: LEAD_ROLES,
     actsAsLead: actsAsLead,
+    ROLE_LABEL: ROLE_LABEL,
+    SAP_USER_ROLES: SAP_USER_ROLES,
     OTHER: OTHER,
     TITLE_MAX: TITLE_MAX,
     ASSET_MAX: ASSET_MAX,

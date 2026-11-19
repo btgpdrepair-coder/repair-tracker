@@ -17,16 +17,8 @@
     DISABLED: ['ถูกระงับ', 'err'],
   };
 
-  var ROLE_LABEL = {
-    STAFF: 'พนักงานหน้างาน',
-    LEAD: 'หัวหน้ากะ',
-    PLANNER: 'Planner',
-    TECH: 'ช่าง',
-    ADMIN: 'แอดมิน',
-    SAFETY: 'จป',
-    DEPT_HEAD: 'หัวหน้าแผนก',
-    DIRECTOR: 'ผอ.',
-  };
+  // ชื่อโรลชุดเดียวกับที่ระบบส่งให้โปรแกรมบนคอม (gas/core.js)
+  var ROLE_LABEL = Core.ROLE_LABEL;
 
   // คำอธิบายโรลในหน้าลงทะเบียน (ตาม mockup)
   var ROLE_HINT = {
@@ -531,12 +523,16 @@
           card.appendChild(el('p', 'warning', '⚠️ คอมนี้บัญชีนี้เคยผูกไว้แล้ว ผูกใหม่แล้วกุญแจเดิมจะใช้ไม่ได้ (ใช้ตอนติดตั้งใหม่หรือกุญแจหาย)'));
         }
         card.appendChild(el('p', 'notice', 'ตรวจว่าชื่อคอมและบัญชี Windows ตรงกับที่หน้าต่างโปรแกรมบนคอมแสดง · หลังผูก คอมนี้ (เฉพาะบัญชี Windows นี้) ดึงรายการงานได้ · ปิดใช้ได้ทุกเมื่อในหน้าคอมที่ผูก'));
+        // ชื่อเรียกคอมให้จำง่าย (เจ้าของขอ 19 พ.ย. 2026) ไม่บังคับ แก้ทีหลังได้ในหน้าคอมที่ผูก
+        var labelInput = field(card, 'label', 'ชื่อเรียกคอม (ไม่บังคับ)', input('text', 'เช่น คอมกลางห้องผลิต'), true);
+        labelInput.maxLength = DEVICE_LABEL_MAX;
+        labelInput.value = info.label || '';
         var confirm = el('button', 'primary', 'ผูกคอม');
         var cancel = el('button', '', 'ไม่ใช่ ไม่ผูก');
         confirm.addEventListener('click', function () {
           confirm.disabled = true;
           cancel.disabled = true;
-          api('confirmPcPair', { code: code })
+          api('confirmPcPair', { code: code, label: labelInput.value })
             .then(function (done) {
               if (!done.ok) return showError(done.error.message);
               showPairPcDone(done.data);
@@ -560,6 +556,11 @@
       var card = el('section', 'card done');
       card.appendChild(el('div', 'done-mark', '✓'));
       card.appendChild(el('h1', '', 'ผูกคอมแล้ว'));
+      if (data.label) {
+        var labelLine = el('p');
+        labelLine.appendChild(el('strong', '', data.label));
+        card.appendChild(labelLine);
+      }
       card.appendChild(el('p', '', data.pcName + ' · บัญชี ' + data.winUser));
       card.appendChild(el('p', 'muted', 'หน้าต่างโปรแกรมบนคอมจะเปลี่ยนเองภายในไม่กี่วินาที'));
       card.appendChild(devicesButton());
@@ -573,7 +574,92 @@
     }
   }
 
+  // ---------- ผูก User SAP (sap-helper 13) ----------
+
+  // หน้ายืนยันผูก User SAP: หัวหน้ากะ จป หรือแอดมินสแกน QR บนหน้าต่างโปรแกรม (ลิงก์ ?page=pair-sap&code=)
+  function showPairSap(me, code) {
+    var main = screen('ผูก User SAP');
+    main.appendChild(el('p', 'muted', 'กำลังโหลด…'));
+    api('sapPairInfo', { code: code })
+      .then(function (res) {
+        if (!res.ok) return showError(res.error.message);
+        var info = res.data;
+        main.innerHTML = '';
+        var card = el('section', 'card');
+        main.appendChild(card);
+        if (info.state === 'EXPIRED') {
+          card.appendChild(el('h1', '', 'QR หมดอายุแล้ว'));
+          card.appendChild(el('p', 'muted', 'QR ผูก User SAP ใช้ได้ 10 นาที ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรมบนคอม แล้วสแกนอีกครั้ง'));
+          return;
+        }
+        if (info.state === 'MINE') {
+          card.appendChild(el('h1', '', 'User SAP นี้ผูกกับคุณแล้ว'));
+          card.appendChild(el('p', '', 'User SAP ' + info.sapUser + ' · ' + info.myName));
+          card.appendChild(el('p', 'muted', 'หน้าต่างโปรแกรมบนคอมจะขึ้นชื่อคุณเองภายในไม่กี่วินาที'));
+          return;
+        }
+        if (info.state === 'TAKEN') {
+          card.appendChild(el('h1', '', 'User SAP นี้ผูกกับคนอื่นแล้ว'));
+          card.appendChild(el('p', '', 'User SAP ' + info.sapUser + ' ผูกกับ ' + info.ownerName));
+          card.appendChild(el('p', 'muted', 'ถ้าผูกผิดคน ให้แอดมินยกเลิกการผูกในหน้าคอมที่ผูกก่อน แล้วสแกนใหม่'));
+          return;
+        }
+        if (info.state === 'USED') {
+          card.appendChild(el('h1', '', 'QR นี้ใช้ไปแล้ว'));
+          card.appendChild(el('p', 'muted', 'ให้กด "ขอ QR ใหม่" ที่หน้าต่างโปรแกรมบนคอม แล้วสแกนอีกครั้ง'));
+          return;
+        }
+        if (info.state === 'PC_DISABLED') {
+          card.appendChild(el('h1', '', 'คอมนี้ถูกปิดใช้แล้ว'));
+          card.appendChild(el('p', 'muted', 'คอม ' + info.pcName + ' ใช้กับระบบไม่ได้แล้ว ให้แอดมินผูกคอมนี้ใหม่ก่อน'));
+          return;
+        }
+        card.appendChild(el('h1', '', 'ผูก User SAP ' + info.sapUser + ' กับคุณ ' + info.myName + ' ใช่ไหม?'));
+        card.appendChild(row('User SAP', el('strong', '', info.sapUser)));
+        card.appendChild(row('ผูกกับ', el('strong', '', info.myName)));
+        card.appendChild(row('คอม', el('span', '', info.pcName + ' · บัญชี Windows ' + info.winUser)));
+        card.appendChild(el('p', 'notice', 'กดผูกเฉพาะเมื่อ User SAP นี้เป็นของคุณ · หลังผูก แค่ล็อกอิน SAP ด้วย User นี้ที่คอมไหนก็ได้ที่ผูกแล้ว โปรแกรมจะรู้ว่าเป็นคุณ และใช้สิทธิ์ของคุณในระบบแจ้งซ่อม'));
+        var yes = el('button', 'primary', 'ใช่ ผูกกับฉัน');
+        var cancel = el('button', '', 'ไม่ใช่ ไม่ผูก');
+        yes.addEventListener('click', function () {
+          yes.disabled = true;
+          cancel.disabled = true;
+          api('confirmSapPair', { code: code })
+            .then(function (done) {
+              if (!done.ok) return showError(done.error.message);
+              var doneMain = screen('ผูก User SAP');
+              var doneCard = el('section', 'card done');
+              doneCard.appendChild(el('div', 'done-mark', '✓'));
+              doneCard.appendChild(el('h1', '', 'ผูก User SAP แล้ว'));
+              doneCard.appendChild(el('p', '', 'User SAP ' + done.data.sapUser + ' · ' + done.data.name));
+              doneCard.appendChild(el('p', 'muted', 'หน้าต่างโปรแกรมบนคอมจะขึ้นชื่อคุณเองภายในไม่กี่วินาที'));
+              doneMain.appendChild(doneCard);
+            })
+            .catch(function () {
+              window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
+              yes.disabled = false;
+              cancel.disabled = false;
+            });
+        });
+        cancel.addEventListener('click', function () {
+          showStatus(me, 'ไม่ได้ผูก User SAP · QR นี้หมดอายุเองใน 10 นาที');
+        });
+        card.appendChild(yes);
+        card.appendChild(cancel);
+      })
+      .catch(function () { showError('โหลดข้อมูล QR ไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่'); });
+  }
+
+  // ชื่อเรียกคอมยาวได้ไม่เกิน (ตรงกับที่ระบบตรวจใน gas/api.js)
+  var DEVICE_LABEL_MAX = 40;
+
+  // หัวรายการคอม: ชื่อเรียกที่แอดมินตั้ง ถ้าไม่มีใช้ชื่อคอม · บัญชี Windows
+  function deviceTitle(d) {
+    return d.label || d.pcName + ' · ' + d.winUser;
+  }
+
   // หน้าคอมที่ผูก (แอดมิน): ชื่อคอม · บัญชี Windows · รุ่น · ใช้ล่าสุด · ปิดใช้ได้ทันที
+  // + User SAP ที่ผูก (sap-helper 13): ยกเลิกการผูกได้ (ผูกผิดคน)
   function showDevices(me) {
     var main = screen('คอมที่ผูก');
     main.appendChild(el('p', 'muted', 'กำลังโหลดรายการคอม…'));
@@ -599,7 +685,8 @@
       devices.forEach(function (d) {
         var item = el('div', 'person');
         var info = el('div', 'person-info');
-        info.appendChild(el('strong', '', d.pcName + ' · ' + d.winUser));
+        info.appendChild(el('strong', '', deviceTitle(d)));
+        if (d.label) info.appendChild(el('small', 'muted', d.deviceId + ' · ' + d.pcName + ' · ' + d.winUser));
         var used = d.lastUsedAt ? 'ใช้ล่าสุด ' + shortTime(d.lastUsedAt) : 'ยังไม่เคยใช้';
         info.appendChild(el('small', 'muted', used + (d.lastSapUser ? ' · ' + d.lastSapUser : '') + ' · รุ่น ' + (d.lastVersion || '-')));
         if (d.disabled) {
@@ -612,9 +699,25 @@
         if (d.disabled) {
           actions.appendChild(badge('ปิดใช้แล้ว', 'err'));
         } else {
+          var rename = el('button', 'small', d.label ? 'แก้ชื่อ' : 'ตั้งชื่อ');
+          rename.addEventListener('click', function () {
+            var label = window.prompt('ชื่อเรียกคอม ' + d.pcName + ' · ' + d.winUser + ' (ไม่เกิน ' + DEVICE_LABEL_MAX + ' ตัวอักษร · เว้นว่าง = ไม่มีชื่อ)', d.label);
+            if (label === null) return;
+            rename.disabled = true;
+            api('renameDevice', { deviceId: d.deviceId, label: label })
+              .then(function (r) {
+                if (!r.ok) window.alert(r.error.details && r.error.details.fields ? r.error.details.fields.label : r.error.message);
+                showDevices(me);
+              })
+              .catch(function () {
+                window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
+                rename.disabled = false;
+              });
+          });
+          actions.appendChild(rename);
           var off = el('button', 'small', 'ปิดใช้');
           off.addEventListener('click', function () {
-            if (!window.confirm('ปิดใช้ ' + d.pcName + ' · ' + d.winUser + '?\nโปรแกรมบนคอมนี้จะใช้ไม่ได้ทันที ต้องผูกใหม่ถึงจะใช้ได้อีก')) return;
+            if (!window.confirm('ปิดใช้ ' + deviceTitle(d) + '?\nโปรแกรมบนคอมนี้จะใช้ไม่ได้ทันที ต้องผูกใหม่ถึงจะใช้ได้อีก')) return;
             off.disabled = true;
             api('disableDevice', { deviceId: d.deviceId })
               .then(function (r) {
@@ -632,9 +735,51 @@
         card.appendChild(item);
       });
       main.appendChild(card);
+      main.appendChild(sapUsersCard(res.data.sapUsers || []));
     }).catch(function () {
       showError('โหลดรายการคอมไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
     });
+
+    function sapUsersCard(sapUsers) {
+      var active = sapUsers.filter(function (u) { return !u.revoked; });
+      var card = el('section', 'card');
+      card.appendChild(el('h1', '', 'User SAP ที่ผูก ' + active.length + ' คน'));
+      card.appendChild(el('p', 'notice', 'ผูก User SAP: ล็อกอิน SAP ที่คอมที่ผูกแล้ว โปรแกรมขึ้น QR ให้เจ้าของ User (หัวหน้ากะ จป แอดมิน) สแกน · ผูกผิดคน: กดยกเลิก แล้วให้คนที่ถูกต้องสแกนใหม่'));
+      if (!sapUsers.length) card.appendChild(el('p', 'muted', 'ยังไม่มี User SAP ที่ผูก'));
+      sapUsers.forEach(function (u) {
+        var item = el('div', 'person');
+        var info = el('div', 'person-info');
+        info.appendChild(el('strong', '', u.sapUser + ' · ' + u.name));
+        info.appendChild(el('small', 'muted', [u.department, ROLE_LABEL[u.role] || u.role].filter(Boolean).join(' · ') +
+          ' · ผูก ' + shortTime(u.pairedAt) + (u.deviceId ? ' ที่ ' + (u.deviceLabel || u.deviceId) : '')));
+        if (u.revoked) info.appendChild(el('small', 'muted', 'ยกเลิก ' + shortTime(u.revokedAt) + (u.revokedBy ? ' โดย ' + u.revokedBy : '')));
+        else if (!u.canUse) info.appendChild(el('small', 'warning', '⚠️ คนนี้ใช้โปรแกรมไม่ได้แล้ว (ไม่ใช่หัวหน้ากะ จป แอดมิน หรือถูกระงับ)'));
+        item.appendChild(info);
+        var actions = el('div', 'person-actions');
+        if (u.revoked) {
+          actions.appendChild(badge('ยกเลิกแล้ว', 'off'));
+        } else {
+          var off = el('button', 'small', 'ยกเลิกการผูก');
+          off.addEventListener('click', function () {
+            if (!window.confirm('ยกเลิกการผูก User SAP ' + u.sapUser + ' กับ ' + u.name + '?\nครั้งถัดไปที่ User นี้ล็อกอิน SAP โปรแกรมจะขึ้น QR ให้ผูกใหม่')) return;
+            off.disabled = true;
+            api('revokeSapUser', { sapUser: u.sapUser })
+              .then(function (r) {
+                if (!r.ok) window.alert(r.error.message);
+                showDevices(me);
+              })
+              .catch(function () {
+                window.alert('ส่งไม่สำเร็จ ตรวจสัญญาณอินเทอร์เน็ตแล้วลองใหม่');
+                off.disabled = false;
+              });
+          });
+          actions.appendChild(off);
+        }
+        item.appendChild(actions);
+        card.appendChild(item);
+      });
+      return card;
+    }
   }
 
   // ---------- เลือกหน้า ----------
@@ -3201,6 +3346,11 @@
     if (page === 'pair-pc') {
       if (me.role === 'ADMIN') return showPairPc(me, params.get('code') || '');
       return showError('QR นี้ใช้ผูกคอมกับระบบ ให้แอดมินเป็นคนสแกน');
+    }
+    // sap-helper 13: QR บนหน้าต่างโปรแกรมเมื่อ User SAP ที่ล็อกอินยังไม่ผูกกับใคร
+    if (page === 'pair-sap') {
+      if (Core.SAP_USER_ROLES.indexOf(me.role) >= 0) return showPairSap(me, params.get('code') || '');
+      return showError('QR นี้ใช้ผูก User SAP กับหัวหน้ากะ จป หรือแอดมิน ให้เจ้าของ User SAP เป็นคนสแกน');
     }
     if (page === 'devices') {
       if (me.role === 'ADMIN') return showDevices(me);
